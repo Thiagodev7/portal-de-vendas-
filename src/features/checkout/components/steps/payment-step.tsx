@@ -4,14 +4,14 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { useMutation } from "@tanstack/react-query"; // Power-up!
 import { Button } from "@/components/ui/button";
-import { CreditCard, Wallet, User, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
-import { Switch } from "@/components/ui/switch"; // Se não tiver shadcn switch, usaremos input checkbox estilizado
+import { CreditCard, Wallet, User, CheckCircle2, AlertCircle, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getUserInfo } from "@/features/checkout/actions/get-user-info";
 import { useCartStore } from "@/features/cart/store/cart-store";
+import { Skeleton } from "@/components/ui/skeleton"; // Importando o Skeleton
 
-// Schema para quando for OUTRA pessoa
 const payerSchema = z.object({
   fullName: z.string().min(5, "Nome completo obrigatório"),
   cpf: z.string().min(11, "CPF inválido"),
@@ -28,10 +28,6 @@ interface PaymentStepProps {
 export function PaymentStep({ onBack }: PaymentStepProps) {
   const { payer, setPayer } = useCartStore();
   const [isHolderPayer, setIsHolderPayer] = useState(payer.isHolder);
-  
-  // Estados para busca de CPF do pagador
-  const [isLoadingCpf, setIsLoadingCpf] = useState(false);
-  const [cpfFeedback, setCpfFeedback] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
   const { register, handleSubmit, setValue, getValues, formState: { errors, isSubmitting } } = useForm<PayerForm>({
     resolver: zodResolver(payerSchema),
@@ -43,38 +39,38 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     }
   });
 
-  // Busca Automática do CPF do Pagador
-  const handleCpfBlur = async () => {
-    const cpf = getValues("cpf");
-    const cleanCpf = cpf?.replace(/\D/g, "") || "";
-
-    if (cleanCpf.length !== 11) return;
-
-    setIsLoadingCpf(true);
-    setCpfFeedback(null);
-
-    const result = await getUserInfo(cleanCpf);
-
-    setIsLoadingCpf(false);
-
-    if (result.success && result.data) {
+  // --- REACT QUERY MUTATION ---
+  // Gerencia o estado da busca de CPF de forma declarativa
+  const cpfMutation = useMutation({
+    mutationFn: async (cpf: string) => {
+      const cleanCpf = cpf.replace(/\D/g, "");
+      if (cleanCpf.length !== 11) throw new Error("CPF Incompleto");
+      return await getUserInfo(cleanCpf);
+    },
+    onSuccess: (result) => {
+      if (result.success && result.data) {
         setValue("fullName", result.data.name);
-        setCpfFeedback({ type: 'success', msg: `Cadastro encontrado: ${result.data.name}` });
-    } else {
-        setCpfFeedback({ type: 'error', msg: "CPF não encontrado. Preencha manualmente." });
+        // Opcional: focar no próximo campo
+      }
+    }
+  });
+
+  const handleCpfBlur = () => {
+    const cpf = getValues("cpf");
+    if (cpf?.replace(/\D/g, "").length === 11) {
+      cpfMutation.mutate(cpf);
     }
   };
 
   const onSubmit = async (data: PayerForm) => {
-    // 1. Salva na store quem é o pagador
     if (isHolderPayer) {
         setPayer({ isHolder: true });
     } else {
         setPayer({ isHolder: false, ...data });
     }
-
-    // 2. Simula o processamento final (Aqui entraria a integração com Gateway Cielo/Getnet)
-    alert("Redirecionando para o Gateway de Pagamento...");
+    // Simulação de ida ao Gateway
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    alert("Redirecionando para ambiente seguro de pagamento...");
   };
 
   return (
@@ -92,14 +88,15 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       </div>
 
       {/* Toggle: Sou o Titular vs Outra Pessoa */}
-      <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-between cursor-pointer"
-           onClick={() => setIsHolderPayer(!isHolderPayer)}>
+      <div 
+           className="group p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300 transition-all cursor-pointer flex items-center justify-between"
+           onClick={() => setIsHolderPayer(!isHolderPayer)}
+      >
           <div className="flex flex-col">
               <span className="text-sm font-bold text-gray-900">O titular é o responsável financeiro?</span>
               <span className="text-xs text-gray-500">Se desmarcar, pediremos os dados do pagador.</span>
           </div>
           
-          {/* Switch Visual Simples (CSS puro para não depender de libs extras agora) */}
           <div className={cn(
               "w-12 h-6 rounded-full p-1 transition-colors duration-300 flex items-center",
               isHolderPayer ? "bg-brand-wine" : "bg-gray-300"
@@ -111,72 +108,83 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           </div>
       </div>
 
-      {/* Formulário do Pagador (Só aparece se NÃO for o titular) */}
+      {/* Formulário do Pagador com SKELETON LOADING */}
       {!isHolderPayer && (
-          <div className="p-5 border border-gray-200 rounded-2xl bg-white shadow-sm animate-in slide-in-from-top-2 fade-in">
-              <div className="flex items-center gap-2 mb-4 text-brand-wine">
+          <div className="p-6 border border-gray-200 rounded-2xl bg-white shadow-sm animate-in slide-in-from-top-2 fade-in">
+              <div className="flex items-center gap-2 mb-6 text-brand-wine pb-4 border-b border-gray-100">
                   <User className="w-4 h-4" />
                   <span className="text-sm font-bold uppercase tracking-wide">Dados do Pagador</span>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-5">
                   {/* CPF Pagador */}
-                  <div className="space-y-1">
-                      <label className="text-sm font-medium text-gray-700">CPF do Pagador</label>
-                      <div className="relative">
+                  <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-gray-700 flex justify-between">
+                        CPF do Pagador
+                        {cpfMutation.isPending && <span className="text-xs text-brand-wine animate-pulse">Buscando cadastro...</span>}
+                      </label>
+                      <div className="relative group">
                           <input 
                               {...register("cpf")}
                               onBlur={handleCpfBlur}
                               className={cn(
-                                  "w-full p-3 rounded-lg border outline-none transition-all pr-10",
-                                  errors.cpf ? "border-red-300 focus:ring-red-200" : "border-gray-300 focus:ring-brand-wine/20"
+                                  "w-full p-3 pl-10 rounded-lg border outline-none transition-all",
+                                  errors.cpf ? "border-red-300 focus:ring-red-200" : "border-gray-300 focus:ring-2 focus:ring-brand-wine/10 focus:border-brand-wine"
                               )}
                               placeholder="000.000.000-00"
                               maxLength={14}
                           />
-                          {isLoadingCpf && (
-                              <div className="absolute right-3 top-3.5">
-                                  <Loader2 className="w-5 h-5 animate-spin text-brand-wine" />
-                              </div>
-                          )}
+                          <Search className="absolute left-3 top-3.5 w-4 h-4 text-gray-400 group-focus-within:text-brand-wine transition-colors" />
                       </div>
-                      {cpfFeedback && (
-                          <div className={cn("text-xs flex items-center gap-1.5 mt-1 font-medium", cpfFeedback.type === 'success' ? "text-green-600" : "text-orange-600")}>
-                              {cpfFeedback.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5"/> : <AlertCircle className="w-3.5 h-3.5"/>}
-                              {cpfFeedback.msg}
+                      
+                      {/* Feedback Visual do React Query */}
+                      {cpfMutation.data?.success && (
+                          <div className="text-xs flex items-center gap-1.5 mt-1 font-medium text-green-600 bg-green-50 p-2 rounded-md">
+                              <CheckCircle2 className="w-3.5 h-3.5"/>
+                              Cadastro encontrado: {cpfMutation.data.data?.name}
                           </div>
                       )}
-                      {errors.cpf && <span className="text-xs text-red-500">{errors.cpf.message}</span>}
+                      {cpfMutation.data?.success === false && (
+                          <div className="text-xs flex items-center gap-1.5 mt-1 font-medium text-orange-600 bg-orange-50 p-2 rounded-md">
+                              <AlertCircle className="w-3.5 h-3.5"/>
+                              {cpfMutation.data.message || "CPF não encontrado. Preencha manualmente."}
+                          </div>
+                      )}
+                      {errors.cpf && <span className="text-xs text-red-500 font-medium">{errors.cpf.message}</span>}
                   </div>
 
-                  {/* Nome Completo */}
-                  <div className="space-y-1">
+                  {/* Nome Completo (Com Skeleton enquanto carrega) */}
+                  <div className="space-y-1.5">
                       <label className="text-sm font-medium text-gray-700">Nome Completo</label>
-                      <input 
-                          {...register("fullName")}
-                          className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/20 outline-none"
-                      />
+                      {cpfMutation.isPending ? (
+                        <Skeleton className="h-12 w-full rounded-lg" />
+                      ) : (
+                        <input 
+                            {...register("fullName")}
+                            className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/10 focus:border-brand-wine outline-none transition-all"
+                        />
+                      )}
                       {errors.fullName && <span className="text-xs text-red-500">{errors.fullName.message}</span>}
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Email */}
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                           <label className="text-sm font-medium text-gray-700">E-mail Financeiro</label>
                           <input 
                               {...register("email")}
-                              className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/20 outline-none"
+                              className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/10 focus:border-brand-wine outline-none transition-all"
                               placeholder="para envio da nota"
                           />
                           {errors.email && <span className="text-xs text-red-500">{errors.email.message}</span>}
                       </div>
 
                       {/* Telefone */}
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                           <label className="text-sm font-medium text-gray-700">Celular</label>
                           <input 
                               {...register("phone")}
-                              className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/20 outline-none"
+                              className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/10 focus:border-brand-wine outline-none transition-all"
                           />
                           {errors.phone && <span className="text-xs text-red-500">{errors.phone.message}</span>}
                       </div>
@@ -185,46 +193,59 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           </div>
       )}
 
-      {/* Métodos de Pagamento (Mock Visual) */}
+      {/* Métodos de Pagamento (Visual Melhorado) */}
       <div className="space-y-4 pt-4">
-          <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Forma de Pagamento</h3>
+          <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide flex items-center gap-2">
+            Forma de Pagamento
+            <span className="text-[10px] font-normal text-gray-500 normal-case bg-gray-100 px-2 py-0.5 rounded-full">Ambiente Seguro</span>
+          </h3>
           
           <div className="grid grid-cols-2 gap-4">
               <button 
                 type="button"
-                className="flex flex-col items-center justify-center p-4 border-2 border-brand-wine bg-brand-wine/5 rounded-xl transition-all"
+                className="group relative flex flex-col items-center justify-center p-5 border-2 border-brand-wine bg-brand-wine/5 rounded-2xl transition-all shadow-sm ring-1 ring-brand-wine/20"
               >
-                  <CreditCard className="w-6 h-6 text-brand-wine mb-2" />
+                  <div className="absolute top-3 right-3">
+                    <div className="h-4 w-4 bg-brand-wine rounded-full border-[3px] border-white shadow-sm" />
+                  </div>
+                  <CreditCard className="w-8 h-8 text-brand-wine mb-3 group-hover:scale-110 transition-transform" />
                   <span className="text-sm font-bold text-brand-wine">Cartão de Crédito</span>
+                  <span className="text-[10px] text-brand-wine/70 mt-1">Aprovação imediata</span>
               </button>
               
               <button 
                 type="button"
-                className="flex flex-col items-center justify-center p-4 border border-gray-200 hover:border-gray-300 rounded-xl transition-all opacity-60"
+                disabled
+                className="flex flex-col items-center justify-center p-5 border border-dashed border-gray-300 rounded-2xl opacity-50 cursor-not-allowed bg-gray-50"
               >
-                  <span className="text-2xl mb-1">📄</span>
-                  <span className="text-sm font-medium text-gray-600">Boleto Bancário</span>
+                  <span className="text-3xl mb-2 grayscale">📄</span>
+                  <span className="text-sm font-medium text-gray-500">Boleto Bancário</span>
+                  <span className="text-[10px] text-gray-400 mt-1">Indisponível no momento</span>
               </button>
           </div>
       </div>
 
       {/* Botões Finais */}
-      <div className="pt-6 flex gap-4 border-t border-gray-100">
+      <div className="pt-8 flex gap-4 border-t border-gray-100">
           <Button 
               type="button" 
               variant="outline"
               onClick={onBack}
-              className="w-1/3 h-12 rounded-xl border-gray-200 text-gray-600 hover:bg-gray-50"
+              className="w-1/3 h-14 text-base rounded-xl border-gray-200 text-gray-600 hover:bg-gray-50"
           >
               Voltar
           </Button>
           
           <Button 
               onClick={isHolderPayer ? () => onSubmit({} as any) : handleSubmit(onSubmit)}
-              className="w-2/3 h-12 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg shadow-green-600/20 transition-all flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="w-2/3 h-14 text-base bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-xl shadow-green-600/20 hover:shadow-green-600/30 transition-all flex items-center justify-center gap-2"
           >
-              {isSubmitting ? "Processando..." : "Finalizar Contratação"}
-              {!isSubmitting && <CheckCircle2 className="w-5 h-5" />}
+              {isSubmitting ? (
+                <>Processando <span className="animate-pulse">...</span></>
+              ) : (
+                <>Finalizar Contratação <CheckCircle2 className="w-5 h-5 ml-1" /></>
+              )}
           </Button>
       </div>
 
