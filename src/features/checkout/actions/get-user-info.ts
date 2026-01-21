@@ -1,77 +1,104 @@
 "use server";
 
-// Definição da resposta da API Externa
-interface UniodontoUserResponse {
-  cadSus: {
-    http_status_cod: number;
-    msg: string;
-    data: Array<{
-      resultado: number;
-      CNS: string;
-      Nome: string;
-      Mae: string;
-      Pai: string;
-      Sexo: number;
-      DataNascimento: string; // Vem como "DD/MM/YYYY"
-      Mensagem: string;
-    }>;
-  };
-}
+import { z } from "zod";
 
-export async function getUserInfo(cpf: string) {
-  // 1. Limpeza do CPF (deixa apenas números)
+// Schema de validação da resposta da API (Contrato de Interface)
+const apiResponseSchema = z.object({
+  cadSus: z.object({
+    http_status_cod: z.number(),
+    data: z.array(
+      z.object({
+        resultado: z.number(),
+        Nome: z.string(),
+        Mae: z.string().optional(),
+        Sexo: z.number(),
+        DataNascimento: z.string(),
+        CNS: z.string().optional(),
+        Mensagem: z.string().optional(),
+      })
+    ).optional(),
+  }),
+});
+
+type UserInfoResponse = {
+  success: boolean;
+  message?: string;
+  data?: {
+    name: string;
+    motherName: string;
+    birthDate: string; // Formato ISO YYYY-MM-DD
+    cns?: string;
+    sex: "M" | "F";
+  };
+};
+
+export async function getUserInfo(cpf: string): Promise<UserInfoResponse> {
+  // 1. Sanitização de Input
   const cleanCpf = cpf.replace(/\D/g, "");
 
   if (cleanCpf.length !== 11) {
-    return { success: false, message: "CPF inválido" };
+    return { success: false, message: "CPF deve conter 11 dígitos." };
+  }
+
+  // 2. Validação de Configuração (Fail Fast)
+  const apiUrl = process.env.UNIODONTO_API_URL;
+  const apiToken = process.env.UNIODONTO_API_TOKEN;
+
+  if (!apiUrl || !apiToken) {
+    console.error("❌ Erro Crítico: Variáveis de ambiente UNIODONTO ausentes.");
+    return { success: false, message: "Erro interno de configuração." };
   }
 
   try {
-    // 2. Chamada Segura à API (Rodando no Servidor)
-    const response = await fetch(
-      `https://bevendasonline.uniodontogoiania.com.br:3092/getUserInfo?cpf=${cleanCpf}`,
-      {
-        method: "GET", // O Curl indicava data '' mas parâmetros na URL costumam ser GET. Testaremos assim.
-        headers: {
-          "Authorization": "Basic YXV0aERldkNyZWF0ZTpvdXQyMDIz", // Sua credencial segura aqui
-          "Content-Type": "application/json",
-        },
-        cache: "no-store", // Garante dados frescos
-      }
-    );
+    // 3. Chamada Segura (Server-to-Server)
+    const response = await fetch(`${apiUrl}/getUserInfo?cpf=${cleanCpf}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Basic ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      next: { revalidate: 3600 }, // Cache por 1 hora para performance
+    });
 
     if (!response.ok) {
-      return { success: false, message: "Erro ao consultar base de dados." };
+      console.error(`Erro API Uniodonto: ${response.status} - ${response.statusText}`);
+      return { success: false, message: "Serviço indisponível no momento." };
     }
 
-    const data: UniodontoUserResponse = await response.json();
+    const rawData = await response.json();
+    
+    // 4. Validação de Contrato (Parse Defensivo)
+    const parsed = apiResponseSchema.safeParse(rawData);
 
-    // 3. Validação do Retorno
-    const userData = data.cadSus?.data?.[0];
+    if (!parsed.success) {
+      console.error("Erro de contrato de API (Schema Mismatch):", parsed.error);
+      return { success: false, message: "Erro ao processar dados do parceiro." };
+    }
 
+    const userData = parsed.data.cadSus.data?.[0];
+
+    // Verifica lógica de negócio da API legada
     if (!userData || userData.resultado !== 1) {
-        // resultado !== 1 geralmente significa não encontrado ou erro na lógica deles
-        return { success: false, message: "CPF não encontrado na base." };
+      return { success: false, message: "CPF não localizado na base." };
     }
 
-    // 4. Formatação de Dados para o Formulário
-    // Converter Data de "03/02/1996" para "1996-02-03" (Padrão HTML Date Input)
+    // 5. Normalização de Dados (Data Transformation)
     const [day, month, year] = userData.DataNascimento.split("/");
-    const formattedDate = `${year}-${month}-${day}`;
+    const formattedDate = `${year}-${month}-${day}`; 
 
     return {
       success: true,
       data: {
         name: userData.Nome,
-        motherName: userData.Mae,
+        motherName: userData.Mae || "",
         birthDate: formattedDate,
         cns: userData.CNS,
-        sex: userData.Sexo
-      }
+        sex: userData.Sexo === 1 ? "M" : "F",
+      },
     };
 
   } catch (error) {
-    console.error("Erro na API Uniodonto:", error);
-    return { success: false, message: "Falha na comunicação com o servidor." };
+    console.error("Erro fatal na action getUserInfo:", error);
+    return { success: false, message: "Ocorreu um erro inesperado. Tente novamente." };
   }
 }
