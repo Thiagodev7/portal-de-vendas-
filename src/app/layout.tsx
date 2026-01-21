@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import Providers from "./providers"; // Importação do novo componente
+import Providers from "./providers";
+import { Toaster } from "@/components/ui/sonner"; // <--- Importar
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
@@ -22,10 +23,11 @@ export default function RootLayout({
         "min-h-screen bg-background font-sans antialiased", 
         inter.variable
       )}>
-        <Providers> {/* Wrapper Global */}
+        <Providers>
           <main className="relative flex min-h-screen flex-col">
              {children}
           </main>
+          <Toaster /> {/* <--- Adicionar aqui, fora do main */}
         </Providers>
       </body>
     </html>
