@@ -48,7 +48,7 @@ export async function getUserInfo(cpf: string): Promise<UserInfoResponse> {
 
   try {
     // 3. Chamada Segura (Server-to-Server)
-    const url = `${API_URL}/datanext/postcadSus`;
+    const url = `${API_URL}/portal-de-vendas/datanext/postcadSus`;
     console.log(`[getUserInfo] Fetching: ${url}`);
     
     const response = await fetch(url, {

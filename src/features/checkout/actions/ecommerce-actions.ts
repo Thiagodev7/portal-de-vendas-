@@ -55,7 +55,7 @@ export async function processPixPayment(data: z.infer<typeof pixPayloadSchema>):
   try {
     const validated = pixPayloadSchema.parse(data);
 
-    const response = await fetch(`${API_URL}/ecommerce/pix`, {
+    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/pix`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -94,7 +94,7 @@ export async function processCreditCardPayment(data: z.infer<typeof creditCardPa
     // If it's a subscription (recurrent monthly), we should use /subscription.
     // Let's assume for now this action is for the 'credit-card' endpoint (Annual/One-off).
     
-    const response = await fetch(`${API_URL}/ecommerce/credit-card`, {
+    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/credit-card`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -116,6 +116,40 @@ export async function processCreditCardPayment(data: z.infer<typeof creditCardPa
 
   } catch (error: unknown) {
     console.error("Credit Card Payment Error:", error);
+    let errorMessage = "Erro desconhecido";
+    if (error instanceof Error) {
+        errorMessage = error.message;
+    }
+    return { success: false, error: errorMessage };
+  }
+}
+
+export async function processRecurringPayment(data: z.infer<typeof creditCardPayloadSchema>): Promise<TransactionResponse> {
+  try {
+    const validated = creditCardPayloadSchema.parse(data);
+
+    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/recurring`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_TOKEN}`,
+      },
+      body: JSON.stringify(validated),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = (errorData && typeof errorData === 'object' && 'error' in errorData)
+            ? String(errorData.error)
+            : `Erro HTTP ${response.status}`;
+        return { success: false, error: errorMessage };
+    }
+
+    const result = await response.json();
+    return { success: true, data: result };
+
+  } catch (error: unknown) {
+    console.error("Recurring Payment Error:", error);
     let errorMessage = "Erro desconhecido";
     if (error instanceof Error) {
         errorMessage = error.message;
