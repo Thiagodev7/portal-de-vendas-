@@ -17,11 +17,11 @@ export default function Home() {
             <div className="container mx-auto text-center">
                 <p className="text-gray-500 mb-4">Teve algum problema na escolha?</p>
                 <div className="flex justify-center gap-4">
-                     <button className="flex items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-full shadow-sm hover:shadow-md transition-all text-gray-700 font-bold">
+                     <button className="flex items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-full shadow-sm hover:shadow-md hover:scale-105 active:scale-95 transition-all text-gray-700 font-bold">
                         <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse"/>
                         Falar no WhatsApp
                      </button>
-                     <button className="px-6 py-3 text-brand-wine-DEFAULT font-bold hover:underline">
+                     <button className="px-6 py-3 text-brand-wine-DEFAULT font-bold hover:underline active:scale-95 transition-transform">
                         0800 123 4567
                      </button>
                 </div>

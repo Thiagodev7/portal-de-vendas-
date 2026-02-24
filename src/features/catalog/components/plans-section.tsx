@@ -1,10 +1,10 @@
 "use client";
 
+import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 import { useState } from "react";
 import { MOCK_PLANS } from "../services/mock-plans";
 import { PlanCard } from "./plan-card";
-import { motion } from "framer-motion";
-import { cn } from "@/lib/utils";
 
 export function PlansSection() {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
@@ -31,7 +31,7 @@ export function PlansSection() {
             <div className="bg-gray-100 p-1.5 rounded-full shadow-inner inline-flex relative">
               <button
                 onClick={() => setBillingCycle("monthly")}
-                className="relative px-8 py-3 w-36 rounded-full focus:outline-none transition-colors duration-200"
+                className="relative px-8 py-3 w-36 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-wine focus-visible:ring-offset-2 active:scale-95 transition-all duration-200"
               >
                 {billingCycle === "monthly" && (
                   <motion.div
@@ -50,7 +50,7 @@ export function PlansSection() {
 
               <button
                 onClick={() => setBillingCycle("yearly")}
-                className="relative px-8 py-3 w-36 rounded-full focus:outline-none transition-colors duration-200 flex items-center justify-center gap-2"
+                className="relative px-8 py-3 w-36 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-wine focus-visible:ring-offset-2 active:scale-95 transition-all duration-200 flex items-center justify-center gap-2"
               >
                 {billingCycle === "yearly" && (
                   <motion.div

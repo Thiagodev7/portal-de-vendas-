@@ -1,23 +1,23 @@
 "use server";
 
+import { API_TOKEN, API_URL } from "@/lib/api-config";
 import { z } from "zod";
 
 // Schema de validação da resposta da API (Contrato de Interface)
+// Schema de validação da resposta da API (Contrato de Interface)
 const apiResponseSchema = z.object({
-  cadSus: z.object({
-    http_status_cod: z.number(),
-    data: z.array(
-      z.object({
-        resultado: z.number(),
-        Nome: z.string(),
-        Mae: z.string().optional(),
-        Sexo: z.number(),
-        DataNascimento: z.string(),
-        CNS: z.string().optional(),
-        Mensagem: z.string().optional(),
-      })
-    ).optional(),
-  }),
+  http_status_cod: z.number(),
+  data: z.array(
+    z.object({
+      resultado: z.number(),
+      Nome: z.string(),
+      Mae: z.string().nullable().optional(),
+      Sexo: z.number(),
+      DataNascimento: z.string(),
+      CNS: z.string().nullable().optional(),
+      Mensagem: z.string().nullable().optional(),
+    })
+  ).optional(),
 });
 
 type UserInfoResponse = {
@@ -41,31 +41,35 @@ export async function getUserInfo(cpf: string): Promise<UserInfoResponse> {
   }
 
   // 2. Validação de Configuração (Fail Fast)
-  const apiUrl = process.env.UNIODONTO_API_URL;
-  const apiToken = process.env.UNIODONTO_API_TOKEN;
-
-  if (!apiUrl || !apiToken) {
-    console.error("❌ Erro Crítico: Variáveis de ambiente UNIODONTO ausentes.");
+  if (!API_URL || !API_TOKEN) {
+    console.error("❌ Erro Crítico: Configuração da API ausente.");
     return { success: false, message: "Erro interno de configuração." };
   }
 
   try {
     // 3. Chamada Segura (Server-to-Server)
-    const response = await fetch(`${apiUrl}/getUserInfo?cpf=${cleanCpf}`, {
-      method: "GET",
+    const url = `${API_URL}/datanext/postcadSus`;
+    console.log(`[getUserInfo] Fetching: ${url}`);
+    
+    const response = await fetch(url, {
+      method: "POST",
       headers: {
-        "Authorization": `Basic ${apiToken}`,
+        "Authorization": `Bearer ${API_TOKEN}`,
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({ cpf: cleanCpf }),
       next: { revalidate: 3600 }, // Cache por 1 hora para performance
     });
 
+    console.log(`[getUserInfo] Response status: ${response.status}`);
+
     if (!response.ok) {
-      console.error(`Erro API Uniodonto: ${response.status} - ${response.statusText}`);
-      return { success: false, message: "Serviço indisponível no momento." };
+        console.error(`Erro API Uniodonto: ${response.status} - ${response.statusText}`);
+        return { success: false, message: "Serviço indisponível no momento." };
     }
 
     const rawData = await response.json();
+    console.log("[getUserInfo] Raw Data:", JSON.stringify(rawData, null, 2));
     
     // 4. Validação de Contrato (Parse Defensivo)
     const parsed = apiResponseSchema.safeParse(rawData);
@@ -75,10 +79,11 @@ export async function getUserInfo(cpf: string): Promise<UserInfoResponse> {
       return { success: false, message: "Erro ao processar dados do parceiro." };
     }
 
-    const userData = parsed.data.cadSus.data?.[0];
+    const userData = parsed.data.data?.[0];
 
     // Verifica lógica de negócio da API legada
-    if (!userData || userData.resultado !== 1) {
+    // Aceita resultado 1 ou 0 como sucesso (baseado em logs recentes)
+    if (!userData || (userData.resultado !== 1 && userData.resultado !== 0)) {
       return { success: false, message: "CPF não localizado na base." };
     }
 
@@ -92,7 +97,7 @@ export async function getUserInfo(cpf: string): Promise<UserInfoResponse> {
         name: userData.Nome,
         motherName: userData.Mae || "",
         birthDate: formattedDate,
-        cns: userData.CNS,
+        cns: userData.CNS || undefined,
         sex: userData.Sexo === 1 ? "M" : "F",
       },
     };

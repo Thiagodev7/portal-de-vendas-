@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useCartStore } from "@/features/cart/store/cart-store";
-import { Check, ShieldCheck, Lock } from "lucide-react";
-import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
+import { Check, Lock, ShieldCheck } from "lucide-react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 // --- IMPORTAÇÃO DOS PASSOS DO WIZARD ---
 import { AddressStep } from "@/features/checkout/components/steps/address-step";
-import { PersonalDataStep } from "@/features/checkout/components/steps/personal-data-step";
 import { PaymentStep } from "@/features/checkout/components/steps/payment-step";
+import { PersonalDataStep } from "@/features/checkout/components/steps/personal-data-step";
 
 // --- MOTOR DE CÁLCULO FINANCEIRO ---
 import { calculateCheckout } from "@/features/checkout/services/pricing-engine";
@@ -51,7 +52,15 @@ export default function CheckoutPage() {
       <header className="bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-             <div className="h-8 w-8 bg-brand-wine rounded-lg flex items-center justify-center text-white font-bold text-lg">U</div>
+             <div className="h-10 w-10 relative flex items-center justify-center">
+                <Image 
+                  src="/iconLogoTest.png" 
+                  alt="Logo Uniodonto" 
+                  width={40} 
+                  height={40} 
+                  className="object-contain"
+                />
+             </div>
              <span className="font-bold text-gray-900 hidden sm:inline-block">Checkout Seguro</span>
           </div>
           <div className="flex items-center gap-2 text-xs font-medium text-green-700 bg-green-50 px-3 py-1.5 rounded-full border border-green-100">

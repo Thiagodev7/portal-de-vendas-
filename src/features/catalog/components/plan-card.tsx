@@ -1,12 +1,12 @@
 "use client";
 
-import { Check, X, Info, ShieldCheck, Sparkles, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { IPlan } from "../types";
-import { motion } from "framer-motion";
-import { useRouter } from "next/navigation";
 import { useCartStore } from "@/features/cart/store/cart-store";
+import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
+import { Check, Info, ShieldCheck, Sparkles, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { IPlan } from "../types";
 
 interface PlanCardProps {
   plan: IPlan;
@@ -142,7 +142,7 @@ export function PlanCard({ plan, isAnnual }: PlanCardProps) {
             <Button 
                 onClick={handleSelectPlan}
                 className={cn(
-                    "w-full h-12 rounded-xl text-sm font-bold shadow-md transition-all duration-300 hover:scale-[1.02]",
+                    "w-full h-12 rounded-xl text-sm font-bold shadow-md transition-all duration-300 hover:scale-[1.02] active:scale-95",
                     isHighlight 
                     ? "bg-brand-wine hover:bg-brand-wine-medium text-white shadow-brand-wine/25" 
                     : "bg-white border-2 border-gray-200 text-gray-600 hover:border-brand-wine hover:text-brand-wine hover:bg-gray-50"
