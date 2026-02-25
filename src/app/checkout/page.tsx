@@ -44,6 +44,7 @@ export default function CheckoutPage() {
   // --- CÁLCULO FINANCEIRO EM TEMPO REAL ---
   // Usa o ID do plano e a contagem de dependentes (atualizada pelo PersonalDataStep)
   const financials = calculateCheckout(selectedPlan.id, dependentsCount, billingCycle);
+  const yearlySavings = (financials.monthlyTotal * 12) - financials.annualTotal;
 
   return (
     <div className="min-h-screen bg-gray-50/50 font-sans">
@@ -209,10 +210,18 @@ export default function CheckoutPage() {
 
                             {/* Desconto Anual */}
                             {billingCycle === 'yearly' && (
-                                <div className="flex justify-between text-green-600 bg-green-50 p-2 rounded-lg text-xs">
-                                    <span>Desconto Anual Aplicado</span>
-                                    <span className="font-bold">10%</span>
-                                </div>
+                                <>
+                                    <div className="flex justify-between text-green-600 bg-green-50 p-2 rounded-lg text-xs mb-1">
+                                        <span>Desconto Anual Aplicado</span>
+                                        <span className="font-bold">10% OFF</span>
+                                    </div>
+                                    {yearlySavings > 0 && (
+                                      <div className="flex justify-between text-green-700 font-medium text-xs px-2">
+                                          <span>Você economizou neste ano:</span>
+                                          <span>R$ {yearlySavings.toFixed(2)}</span>
+                                      </div>
+                                    )}
+                                </>
                             )}
                         </div>
 
