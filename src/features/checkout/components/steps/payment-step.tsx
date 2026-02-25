@@ -263,6 +263,14 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  // Cálculos prévios de preços para exibição
+  const monthlyPricing = selectedPlan ? calculateCheckout(selectedPlan.id, dependentsCount, "monthly") : null;
+  const yearlyPricing = selectedPlan ? calculateCheckout(selectedPlan.id, dependentsCount, "yearly") : null;
+  const yearlySavings = (monthlyPricing?.monthlyTotal || 0) * 12 - (yearlyPricing?.annualTotal || 0);
+
+  const formatBRL = (value: number) =>
+    new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+
   const needsCard = paymentMethod === "credit_card" || paymentMethod === "recurring";
   const submitLabel =
     paymentMethod === "recurring"
@@ -341,21 +349,38 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
               type="button"
               onClick={() => { setCycle(c); setPaymentMethod(null); }}
               className={cn(
-                "p-4 rounded-2xl border-2 flex flex-col items-center gap-1 transition-all",
+                "p-4 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all h-full",
                 cycle === c
-                  ? "border-brand-wine bg-brand-wine/5"
-                  : "border-gray-200 hover:border-brand-wine/40"
+                  ? "border-brand-wine bg-brand-wine/5 shadow-sm"
+                  : "border-gray-200 hover:border-brand-wine/40 bg-white"
               )}
             >
-              <CalendarDays className={cn("w-6 h-6", cycle === c ? "text-brand-wine" : "text-gray-400")} />
-              <span className={cn("font-bold text-sm", cycle === c ? "text-brand-wine" : "text-gray-500")}>
-                {c === "monthly" ? "Mensal" : "Anual"}
-              </span>
-              {c === "yearly" && (
-                <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-                  Economia de até 20%
+              <div className="flex items-center gap-2">
+                <CalendarDays className={cn("w-5 h-5", cycle === c ? "text-brand-wine" : "text-gray-400")} />
+                <span className={cn("font-bold text-sm", cycle === c ? "text-brand-wine" : "text-gray-600")}>
+                  {c === "monthly" ? "Mensal" : "Anual"}
                 </span>
-              )}
+              </div>
+              
+              <div className="text-center mt-1">
+                {c === "monthly" && monthlyPricing && (
+                  <span className={cn("text-lg font-bold block", cycle === c ? "text-brand-wine" : "text-gray-800")}>
+                    {formatBRL(monthlyPricing.monthlyTotal)}<span className="text-xs font-normal text-gray-500">/mês</span>
+                  </span>
+                )}
+                {c === "yearly" && yearlyPricing && (
+                  <>
+                    <span className={cn("text-lg font-bold block", cycle === c ? "text-brand-wine" : "text-gray-800")}>
+                      {formatBRL(yearlyPricing.annualTotal)}<span className="text-xs font-normal text-gray-500">/ano</span>
+                    </span>
+                    {yearlySavings > 0 && (
+                      <span className="inline-block mt-1 text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold">
+                        Economia de {formatBRL(yearlySavings)}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
             </button>
           ))}
         </div>
