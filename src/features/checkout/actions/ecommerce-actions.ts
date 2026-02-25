@@ -9,9 +9,15 @@ const pixPayloadSchema = z.object({
   customer: z.object({
     name: z.string(),
     cpf: z.string(),
-    email: z.string().email(),
+    email: z.string().optional().default(""),
     phone: z.string(),
     cep: z.string(),
+    // Campos de endereço para o debtor da Celcoin BaaS
+    street: z.string().optional().default(""),
+    number: z.string().optional().default("1"),
+    neighborhood: z.string().optional().default(""),
+    city: z.string().optional().default(""),
+    state: z.string().optional().default(""),
   }),
   plan: z.string(),
   value: z.number(), // em centavos
@@ -22,7 +28,7 @@ const creditCardPayloadSchema = z.object({
   customer: z.object({
     name: z.string(),
     cpf: z.string(),
-    email: z.string().email(),
+    email: z.string().optional().default(""),
     phone: z.string(),
     cep: z.string(),
   }),

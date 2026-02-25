@@ -3,13 +3,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import {
-    CalendarDays,
-    CreditCard,
-    Loader2,
-    RefreshCcw,
-    Search,
-    User,
-    Wallet,
+  CalendarDays,
+  CheckCircle,
+  Copy,
+  CreditCard,
+  Loader2,
+  RefreshCcw,
+  Search,
+  User,
+  Wallet,
 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -26,21 +28,20 @@ import { cn } from "@/lib/utils";
 type BillingCycle = "monthly" | "yearly";
 type PaymentMethod = "credit_card" | "pix" | "recurring" | null;
 
-const payerSchema = z.object({
-  fullName: z.string().min(5, "Nome completo obrigatório"),
-  cpf: z.string().min(11, "CPF inválido"),
-  email: z.string().email("E-mail inválido"),
-  phone: z.string().min(10, "Telefone inválido"),
-});
-
-const cardSchema = z.object({
+const formSchema = z.object({
+  // Dados do pagador (só quando diferente do titular)
+  fullName: z.string().optional(),
+  cpf: z.string().optional(),
+  email: z.string().optional(),
+  phone: z.string().optional(),
+  // Cartão
   cardNumber: z.string().optional(),
   cardName: z.string().optional(),
   cardExpiration: z.string().optional(),
   cardCvv: z.string().optional(),
 });
 
-type FullForm = z.infer<typeof payerSchema> & z.infer<typeof cardSchema>;
+type FullForm = z.infer<typeof formSchema>;
 
 interface PaymentStepProps {
   onBack: () => void;
@@ -64,7 +65,7 @@ const PAYMENT_OPTIONS: Record<
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function PaymentStep({ onBack }: PaymentStepProps) {
-  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount } = useCartStore();
+  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount, address, holder } = useCartStore();
 
   // A seleção de ciclo pode ser sobrescrita pelo usuário neste step
   const [cycle, setCycle] = useState<BillingCycle>(storeCycle as BillingCycle ?? "monthly");
@@ -78,14 +79,20 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     getValues,
     formState: { errors, isSubmitting },
   } = useForm<FullForm>({
-    resolver: zodResolver(payerSchema.merge(cardSchema)),
-    defaultValues: {
-      fullName: payer.fullName || "",
-      cpf: payer.cpf || "",
-      email: payer.email || "",
-      phone: payer.phone || "",
-    },
+    resolver: zodResolver(formSchema),
   });
+  // ── States Pix ──────────────────────────────────────────────────────────────
+  const [pixData, setPixData] = useState<{ qrCode: string; image: string; value: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyPix = () => {
+    if (pixData?.qrCode) {
+      navigator.clipboard.writeText(pixData.qrCode);
+      setCopied(true);
+      toast.success("Código Copia e Cola copiado!");
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   // ── CPF lookup ─────────────────────────────────────────────────────────────
   const cpfMutation = useMutation({
@@ -120,18 +127,60 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       return;
     }
 
+    // Validate payer fields at runtime only when holder is NOT the payer
+    if (!isHolderPayer) {
+      if (!data.fullName || data.fullName.trim().length < 5) {
+        toast.error("Nome completo inválido");
+        return;
+      }
+      if (!data.cpf || data.cpf.replace(/\D/g, "").length !== 11) {
+        toast.error("CPF inválido");
+        return;
+      }
+      if (!data.email || !data.email.includes("@")) {
+        toast.error("E-mail inválido");
+        return;
+      }
+      if (!data.phone || data.phone.replace(/\D/g, "").length < 10) {
+        toast.error("Telefone inválido");
+        return;
+      }
+    }
+
     try {
       // Salva pagador na store
-      isHolderPayer ? setPayer({ isHolder: true }) : setPayer({ isHolder: false, ...data });
+      if (isHolderPayer) {
+        setPayer({ isHolder: true, cpf: holder?.cpf, phone: holder?.phone, email: holder?.email });
+      } else {
+        setPayer({ isHolder: false, ...data });
+      }
 
-      // Dados do cliente
-      const customerData = {
-        name: data.fullName || "Titular",
-        cpf: data.cpf || "",
-        email: data.email || "",
-        phone: data.phone || "",
-        cep: "74000000", // TODO: Pegar do step de endereço
-      };
+      // Dados do cliente — usa holder do store quando titular = pagador
+      const customerData = isHolderPayer
+        ? {
+            name: holder?.name || "Titular",
+            cpf: holder?.cpf || "",
+            email: holder?.email || "",
+            phone: holder?.phone || "",
+            cep: address?.cep || "74000000",
+            street: address?.street || "",
+            number: address?.number || "1",
+            neighborhood: address?.neighborhood || "",
+            city: address?.city || "",
+            state: address?.uf || "",
+          }
+        : {
+            name: data.fullName || "Titular",
+            cpf: data.cpf?.replace(/\D/g, "") || "",
+            email: data.email || "",
+            phone: data.phone?.replace(/\D/g, "") || "",
+            cep: address?.cep || "74000000",
+            street: address?.street || "",
+            number: address?.number || "1",
+            neighborhood: address?.neighborhood || "",
+            city: address?.city || "",
+            state: address?.uf || "",
+          };
 
       // Valor
       const pricing = calculateCheckout(selectedPlan.id, dependentsCount, cycle);
@@ -159,7 +208,21 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           value: totalValueCents,
         });
         if (result.success) {
-          toast.success("Pix gerado com sucesso! Aguardando pagamento.", { duration: 8000 });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const trans = (result.data as any)?.Charge?.Transactions?.[0];
+          const pixCode = trans?.Pix?.qrCode;
+          const pixImage = trans?.Pix?.image || trans?.Pix?.imageQrcode;
+          
+          if (pixCode) {
+            setPixData({
+              qrCode: pixCode,
+              image: pixImage,
+              value: totalValueCents / 100
+            });
+            toast.success("Pix gerado com sucesso! Aguardando pagamento.", { duration: 8000 });
+          } else {
+            toast.error("Erro ao gerar Pix", { description: "QR Code não retornado pela API." });
+          }
         } else {
           toast.error("Erro ao gerar Pix", { description: result.error });
         }
@@ -207,6 +270,52 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       : paymentMethod === "pix"
       ? "Gerar Pix"
       : "Pagar e Finalizar";
+
+  if (pixData) {
+    return (
+      <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500 text-center flex flex-col items-center">
+        <div className="bg-green-100 p-4 rounded-full mb-4">
+          <CheckCircle className="w-10 h-10 text-green-600" />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900">Pedido Registrado!</h2>
+        <p className="text-gray-500 max-w-sm">Escaneie o QR Code abaixo no seu aplicativo de banco para finalizar o pagamento e ativar seu plano.</p>
+        
+        {pixData.image && (
+          <div className="bg-white p-4 border rounded-2xl shadow-sm inline-block">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={pixData.image} alt="QR Code Pix" className="w-56 h-56 object-contain" />
+          </div>
+        )}
+        
+        <h3 className="text-2xl font-bold text-gray-900">
+          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(pixData.value)}
+        </h3>
+        
+        <div className="w-full max-w-sm space-y-2 mt-4">
+          <p className="text-sm text-gray-500 font-medium">Ou utilize o Pix Copia e Cola:</p>
+          <div className="flex bg-gray-50 border rounded-xl overflow-hidden shadow-sm">
+            <input 
+              type="text" 
+              readOnly 
+              value={pixData.qrCode} 
+              className="bg-transparent flex-1 px-4 py-3 text-sm text-gray-600 outline-none truncate" 
+            />
+            <button 
+              onClick={handleCopyPix} 
+              className="p-3 bg-gray-100 hover:bg-gray-200 border-l transition-colors focus:ring-2 focus:ring-brand-wine focus:outline-none"
+              title="Copiar código PIX"
+            >
+              {copied ? <CheckCircle className="w-5 h-5 text-green-600" /> : <Copy className="w-5 h-5 text-gray-600" />}
+            </button>
+          </div>
+        </div>
+        
+        <Button onClick={() => setPixData(null)} variant="outline" className="mt-8 rounded-xl h-12 w-full max-w-sm">
+           Voltar para formas de pagamento
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
@@ -262,6 +371,25 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform", isHolderPayer ? "translate-x-6" : "translate-x-0")} />
         </div>
       </div>
+
+      {/* ── Dados do Titular (visível quando titular é o pagador) ── */}
+      {isHolderPayer && (
+        <div className="p-5 border border-brand-wine/20 rounded-2xl bg-brand-wine/5 space-y-2 animate-in slide-in-from-top-2">
+          <h3 className="text-sm font-bold uppercase text-brand-wine flex gap-2">
+            <User className="w-4 h-4 mt-0.5" /> Cobrança para o Titular
+          </h3>
+          {holder ? (
+            <div className="space-y-0.5 text-sm text-gray-700">
+              <p><span className="font-medium">Nome:</span> {holder.name}</p>
+              <p><span className="font-medium">CPF:</span> {holder.cpf}</p>
+              <p><span className="font-medium">E-mail:</span> {holder.email}</p>
+              <p><span className="font-medium">Telefone:</span> {holder.phone}</p>
+            </div>
+          ) : (
+            <p className="text-sm text-orange-600">Volte ao passo anterior e informe o CPF do titular.</p>
+          )}
+        </div>
+      )}
 
       {/* ── Formulário do Pagador ── */}
       {!isHolderPayer && (

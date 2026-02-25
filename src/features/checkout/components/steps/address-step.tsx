@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
 import { Button } from "@/components/ui/button";
-import { MapPin, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useCartStore } from "@/features/cart/store/cart-store";
 import { validateZipCode } from "@/features/checkout/services/address-service";
 import { cn } from "@/lib/utils";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { AlertCircle, CheckCircle2, Loader2, MapPin } from "lucide-react";
+import { useState } from "react";
+import { useForm } from "react-hook-form";
+import * as z from "zod";
 
 // Schema de Validação
 const addressSchema = z.object({
@@ -28,6 +29,7 @@ interface AddressStepProps {
 }
 
 export function AddressStep({ onNext, onBack }: AddressStepProps) {
+  const { setAddress } = useCartStore();
   const [isLoadingCep, setIsLoadingCep] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
   const [coverageSuccess, setCoverageSuccess] = useState(false);
@@ -72,9 +74,17 @@ export function AddressStep({ onNext, onBack }: AddressStepProps) {
   };
 
   const onSubmit = async (data: AddressForm) => {
-    // Aqui você salvaria no Zustand ou enviaria pro backend
-    console.log("Endereço validado:", data);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Persiste o endereço no cart store para uso no PaymentStep (Celcoin debtor)
+    setAddress({
+      cep: data.cep.replace(/\D/g, ""),
+      street: data.street,
+      number: data.number,
+      neighborhood: data.neighborhood,
+      city: data.city,
+      uf: data.uf,
+      complement: data.complement,
+    });
+    await new Promise(resolve => setTimeout(resolve, 300));
     onNext();
   };
 

@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
 import { Button } from "@/components/ui/button";
-import { ChevronRight, User, Loader2, CheckCircle2, AlertCircle, Plus, Trash2, Users } from "lucide-react";
-import { getUserInfo } from "@/features/checkout/actions/get-user-info";
 import { useCartStore } from "@/features/cart/store/cart-store";
+import { getUserInfo } from "@/features/checkout/actions/get-user-info";
 import { cn } from "@/lib/utils";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { AlertCircle, CheckCircle2, ChevronRight, Loader2, Plus, Trash2, User, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useFieldArray, useForm } from "react-hook-form";
+import * as z from "zod";
 
 // --- SCHEMAS (Permitindo string vazia inicial para evitar erros de TS) ---
 
@@ -39,16 +39,24 @@ interface PersonalDataStepProps {
 }
 
 export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
-  const setDependentsCount = useCartStore((state) => state.setDependentsCount);
+  const { setDependentsCount, setHolder } = useCartStore();
   
   const [isLoadingCpf, setIsLoadingCpf] = useState(false);
   const [loadingDependentIndex, setLoadingDependentIndex] = useState<number | null>(null);
   const [cpfFeedback, setCpfFeedback] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
   const { register, control, handleSubmit, setValue, getValues, setFocus, formState: { errors, isSubmitting } } = useForm<PersonalDataForm>({
-    resolver: zodResolver(personalDataSchema),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    resolver: zodResolver(personalDataSchema) as any,
     defaultValues: {
-      dependents: []
+      fullName: "",
+      cpf: "",
+      email: "",
+      phone: "",
+      birthDate: "",
+      sex: "",
+      motherName: "",
+      dependents: [],
     }
   });
 
@@ -79,13 +87,10 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
     if (result.success && result.data) {
         setValue("fullName", result.data.name);
         setValue("birthDate", result.data.birthDate);
-        if(result.data.motherName) setValue("motherName", result.data.motherName);
-        
-        if (result.data.sex === 1) setValue("sex", "M");
-        if (result.data.sex === 2) setValue("sex", "F");
-        
+        if (result.data.motherName) setValue("motherName", result.data.motherName);
+        setValue("sex", result.data.sex); // result.data.sex já é "M" ou "F" (string)
         setCpfFeedback({ type: 'success', msg: `Olá, ${result.data.name.split(' ')[0]}! Encontramos seu cadastro.` });
-        setFocus("sex"); 
+        setFocus("email");
     } else {
         setCpfFeedback({ type: 'error', msg: "Cadastro não localizado. Preencha manualmente." });
     }
@@ -108,15 +113,19 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
     if (result.success && result.data) {
         setValue(`dependents.${index}.fullName`, result.data.name);
         setValue(`dependents.${index}.birthDate`, result.data.birthDate);
-        if (result.data.sex === 1) setValue(`dependents.${index}.sex`, "M");
-        if (result.data.sex === 2) setValue(`dependents.${index}.sex`, "F");
+        setValue(`dependents.${index}.sex`, result.data.sex); // já é "M" ou "F"
     }
   };
 
   const onSubmit = async (data: PersonalDataForm) => {
-    console.log("Dados Completos (Titular + Dependentes):", data);
-    // Aqui você enviaria para o backend ou salvaria no estado global
-    await new Promise(resolve => setTimeout(resolve, 800));
+    // Salva titular no store para o PaymentStep usar quando titular = responsável financeiro
+    setHolder({
+      name: data.fullName,
+      cpf: data.cpf.replace(/\D/g, ""),
+      email: data.email,
+      phone: data.phone.replace(/\D/g, ""),
+    });
+    await new Promise(resolve => setTimeout(resolve, 500));
     onNext();
   };
 
