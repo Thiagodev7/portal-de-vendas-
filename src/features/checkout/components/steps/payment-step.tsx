@@ -13,7 +13,7 @@ import {
   User,
   Wallet,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type BillingCycle = "monthly" | "yearly";
-type PaymentMethod = "credit_card" | "pix" | "recurring" | null;
+type PaymentMethod = "credit_card" | "pix" | null;
 
 const formSchema = z.object({
   // Dados do pagador (só quando diferente do titular)
@@ -55,7 +55,6 @@ const PAYMENT_OPTIONS: Record<
   monthly: [
     { id: "credit_card", label: "Cartão de Crédito", icon: <CreditCard className="w-7 h-7" /> },
     { id: "pix",         label: "Pix",               icon: <span className="text-2xl">💠</span> },
-    { id: "recurring",   label: "Débito Recorrente",  icon: <RefreshCcw className="w-7 h-7" /> },
   ],
   yearly: [
     { id: "credit_card", label: "Cartão de Crédito", icon: <CreditCard className="w-7 h-7" />, badge: "até 12x" },
@@ -71,6 +70,7 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
   const [cycle, setCycle] = useState<BillingCycle>(storeCycle as BillingCycle ?? "monthly");
   const [isHolderPayer, setIsHolderPayer] = useState(payer.isHolder);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null);
+  const [isRecurringCard, setIsRecurringCard] = useState(false);
 
   const {
     register,
@@ -82,8 +82,18 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     resolver: zodResolver(formSchema),
   });
   // ── States Pix ──────────────────────────────────────────────────────────────
-  const [pixData, setPixData] = useState<{ qrCode: string; image: string; value: number } | null>(null);
+  const [pixData, setPixData] = useState<{
+    qrCode?: string;
+    image?: string;
+    value: number;
+    paymentLink?: string;
+    myId?: string;
+    status?: string;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pixApproved, setPixApproved] = useState(false);
+  const [datasysState, setDatasysState] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [datasysError, setDatasysError] = useState<string | null>(null);
 
   const handleCopyPix = () => {
     if (pixData?.qrCode) {
@@ -93,6 +103,168 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
+  // Polling do status do Pix (e, quando disponível, captura status/aprovação)
+  useEffect(() => {
+    const myId = pixData?.myId;
+    if (!myId) return;
+
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const tick = async () => {
+      try {
+        const { getCelcoinTransactionStatus } = await import("@/features/checkout/actions/ecommerce-actions");
+        const res = await getCelcoinTransactionStatus(myId);
+        if (cancelled || !res.success) return;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tx = (res.data as any)?.Transactions?.[0];
+        const status = tx?.status as string | undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const charge = tx?.Charge as any | undefined;
+        const paymentLink = charge?.paymentLink as string | undefined;
+
+        setPixData((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: status || prev.status,
+                paymentLink: paymentLink || prev.paymentLink,
+              }
+            : prev
+        );
+
+        const normalized = (status || "").toLowerCase();
+        const isPaid =
+          normalized.includes("paid") ||
+          normalized.includes("approved") ||
+          normalized.includes("captured") ||
+          normalized.includes("authorized") ||
+          normalized.includes("payexternal");
+
+        if (isPaid) {
+          setPixApproved(true);
+          toast.success("Pagamento Pix aprovado!");
+          if (interval) clearInterval(interval);
+        }
+      } catch {
+        // silencioso: não queremos spam de erro no polling
+      }
+    };
+
+    tick();
+    interval = setInterval(tick, 5000);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [pixData?.myId]);
+
+  // Após pagamento aprovado, envia inserção no DataSys via /datanext/insertClient
+  useEffect(() => {
+    const run = async () => {
+      if (!pixApproved) return;
+      if (datasysState !== "idle") return;
+      if (!holder || !address || !selectedPlan) return;
+
+      const contractId = Number(process.env.UNIODONTO_DATASYS_CONTRACT_ID);
+      const planId = Number(process.env.UNIODONTO_DATASYS_PLAN_ID);
+      if (!Number.isFinite(contractId) || !Number.isFinite(planId)) {
+        setDatasysState("error");
+        setDatasysError("Configuração ausente: IDs do contrato/plano do DataSys.");
+        toast.error("Não foi possível finalizar", { description: "IDs do contrato/plano do DataSys não configurados." });
+        return;
+      }
+
+      const toDdMmYyyy = (iso: string) => {
+        const [y, m, d] = String(iso || "").split("-");
+        if (!y || !m || !d) return "";
+        return `${d}-${m}-${y}`;
+      };
+
+      const cpfDigits = holder.cpf.replace(/\D/g, "");
+      const cepDigits = address.cep.replace(/\D/g, "");
+      const phoneDigits = holder.phone.replace(/\D/g, "");
+      const ddd = phoneDigits.slice(0, 2);
+      const phone = phoneDigits.slice(2);
+
+      setDatasysState("sending");
+      setDatasysError(null);
+
+      const payload = {
+        pessoa_titular: {
+          id_sexo: holder.sex === "M" ? 1 : 2,
+          id_estado_civil: 6,
+          nome: holder.name,
+          data_nascimento: toDdMmYyyy(holder.birthDate),
+          nome_mae: holder.motherName || "",
+          nome_pai: "",
+          cpf: cpfDigits,
+          rg: "",
+          rg_data_emissao: "",
+          rg_orgao_emissor: "",
+          cns: holder.cns || "",
+          naturalde: "",
+          observacao: "Inserção via e-vendas",
+          id_origem: null,
+        },
+        endereco: {
+          id_cidade: address.cityId ?? null,
+          id_tipo_logradouro: address.streetTypeId ?? null,
+          nome_cidade: address.city,
+          sigla_uf: address.uf,
+          cep: cepDigits,
+          bairro: address.neighborhood,
+          logradouro: address.street,
+          numero: Number(address.number) || address.number,
+          complemento: address.complement || "",
+        },
+        contato: [
+          {
+            id_meio_comunicacao: 1,
+            ddd,
+            descricao: phone,
+            contato: "Telefone",
+            nome_contato: holder.name,
+          },
+          {
+            id_meio_comunicacao: 5,
+            ddd: "",
+            descricao: holder.email,
+            contato: "E-mail",
+            nome_contato: holder.name,
+          },
+        ],
+        contrato: {
+          id_contrato: contractId,
+          id_plano: planId,
+          id_tipo_cobranca: 8,
+          dia_vencimento: 10,
+          data_adesao_contratual: toDdMmYyyy(new Date().toISOString().slice(0, 10)),
+          data_inicio_cobranca: toDdMmYyyy(new Date().toISOString().slice(0, 10)),
+          data_adesao_plano: toDdMmYyyy(new Date().toISOString().slice(0, 10)),
+          data_inicio_uso: toDdMmYyyy(new Date().toISOString().slice(0, 10)),
+          observacao: `Inserção via ecommerce - ${selectedPlan.name}`,
+          nro_proposta: "",
+        },
+      };
+
+      const { insertDatasysClient } = await import("@/features/checkout/actions/ecommerce-actions");
+      const res = await insertDatasysClient(payload);
+      if (res.success) {
+        setDatasysState("success");
+        toast.success("Cadastro concluído! Seu plano está sendo ativado.");
+      } else {
+        setDatasysState("error");
+        setDatasysError(res.error || "Erro ao inserir no DataSys");
+        toast.error("Falha ao finalizar cadastro", { description: res.error });
+      }
+    };
+
+    run();
+  }, [pixApproved, datasysState, holder, address, selectedPlan]);
 
   // ── CPF lookup ─────────────────────────────────────────────────────────────
   const cpfMutation = useMutation({
@@ -185,41 +357,53 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       // Valor
       const pricing = calculateCheckout(selectedPlan.id, dependentsCount, cycle);
       const totalValueCents = Math.round(pricing.totalDueNow * 100);
+      const peopleCount = dependentsCount + 1;
+      const enrollmentUnitCents = Math.round(pricing.enrollmentFee * 100);
+      const monthlyUnitCents = Math.round(pricing.baseFee * 100);
+      const numMonths = cycle === "yearly" ? 12 : 1;
 
-      // Dados do cartão
-      const buildCard = () => {
-        const [expMonth, expYear] = (data.cardExpiration || "").split("/");
-        return {
-          name: data.cardName || "",
-          number: (data.cardNumber || "").replace(/\D/g, ""),
-          holder: data.cardName || "",
-          expirationMonth: expMonth,
-          expirationYear: `20${expYear}`,
-          cvv: data.cardCvv || "",
-        };
-      };
+      const username = process.env.UNIODONTO_ECOMMERCE_USERNAME || "uniodonto";
 
       // Chama a action correta
       if (paymentMethod === "pix") {
         const { processPixPayment } = await import("@/features/checkout/actions/ecommerce-actions");
         const result = await processPixPayment({
+          username,
           customer: customerData,
           plan: selectedPlan.name,
+          enrollment: enrollmentUnitCents,
+          monthly: monthlyUnitCents,
           value: totalValueCents,
+          numLives: peopleCount,
+          numMonths,
         });
         if (result.success) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const trans = (result.data as any)?.Charge?.Transactions?.[0];
           const pixCode = trans?.Pix?.qrCode;
           const pixImage = trans?.Pix?.image || trans?.Pix?.imageQrcode;
+          // Em alguns ambientes (ex: sandbox), a API retorna apenas `paymentLink` e não o QR/Copy&Paste.
+          // Nesse caso, abrimos o link para o usuário concluir o Pix.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const paymentLink = (result.data as any)?.Charge?.paymentLink;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const myId = (result.data as any)?.Charge?.myId as string | undefined;
           
           if (pixCode) {
             setPixData({
               qrCode: pixCode,
               image: pixImage,
-              value: totalValueCents / 100
+              value: totalValueCents / 100,
+              myId,
             });
             toast.success("Pix gerado com sucesso! Aguardando pagamento.", { duration: 8000 });
+          } else if (typeof paymentLink === "string" && paymentLink.length > 0) {
+            setPixData({
+              value: totalValueCents / 100,
+              paymentLink,
+              myId,
+            });
+            toast.success("Pix gerado. Escaneie o QR Code na tela.", { duration: 8000 });
           } else {
             toast.error("Erro ao gerar Pix", { description: "QR Code não retornado pela API." });
           }
@@ -228,32 +412,48 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
         }
 
       } else if (paymentMethod === "credit_card") {
-        const { processCreditCardPayment } = await import("@/features/checkout/actions/ecommerce-actions");
-        const result = await processCreditCardPayment({
-          customer: customerData,
-          card: buildCard(),
-          value: totalValueCents,
-          numMonths: cycle === "yearly" ? 12 : 1,
-          plan: selectedPlan.name,
-        });
-        if (result.success) {
-          toast.success("Pagamento aprovado! Contrato em processamento.");
+        // Mensal permite optar por recorrência no cartão; anual permanece como cobrança parcelada/avulsa.
+        if (cycle === "monthly" && isRecurringCard) {
+          const { processRecurringPayment } = await import("@/features/checkout/actions/ecommerce-actions");
+          const result = await processRecurringPayment({
+            username,
+            customer: customerData,
+            value: totalValueCents,
+            plan: selectedPlan.name,
+            enrollment: enrollmentUnitCents,
+            monthly: monthlyUnitCents,
+            numLives: peopleCount,
+            numMonths,
+          });
+          if (result.success) {
+            toast.success("Cobrança recorrente criada com sucesso!");
+          } else {
+            toast.error("Falha ao criar recorrência", { description: result.error });
+          }
         } else {
-          toast.error("Falha no pagamento", { description: result.error });
-        }
-
-      } else if (paymentMethod === "recurring") {
-        const { processRecurringPayment } = await import("@/features/checkout/actions/ecommerce-actions");
-        const result = await processRecurringPayment({
-          customer: customerData,
-          card: buildCard(),
-          value: totalValueCents,
-          plan: selectedPlan.name,
-        });
-        if (result.success) {
-          toast.success("Assinatura recorrente criada com sucesso!");
-        } else {
-          toast.error("Falha ao criar recorrência", { description: result.error });
+          const { processCreditCardPayment } = await import("@/features/checkout/actions/ecommerce-actions");
+          const result = await processCreditCardPayment({
+            username,
+            customer: customerData,
+            value: totalValueCents,
+            plan: selectedPlan.name,
+            enrollment: enrollmentUnitCents,
+            monthly: monthlyUnitCents,
+            numLives: peopleCount,
+            numMonths,
+          });
+          if (result.success) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const link = (result.data as any)?.Charge?.PaymentMethodCreditCard?.Link?.url;
+            if (typeof link === "string" && link.length > 0) {
+              window.open(link, "_blank", "noopener,noreferrer");
+              toast.success("Link de pagamento gerado. Abra a janela para concluir.");
+            } else {
+              toast.success("Link de pagamento gerado.");
+            }
+          } else {
+            toast.error("Falha no pagamento", { description: result.error });
+          }
         }
       }
     } catch (error) {
@@ -271,12 +471,12 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
   const formatBRL = (value: number) =>
     new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 
-  const needsCard = paymentMethod === "credit_card" || paymentMethod === "recurring";
+  const needsCard = paymentMethod === "credit_card";
   const submitLabel =
-    paymentMethod === "recurring"
-      ? "Contratar Recorrência"
-      : paymentMethod === "pix"
+    paymentMethod === "pix"
       ? "Gerar Pix"
+      : paymentMethod === "credit_card" && cycle === "monthly" && isRecurringCard
+      ? "Contratar Recorrência"
       : "Pagar e Finalizar";
 
   if (pixData) {
@@ -288,10 +488,20 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
         <h2 className="text-2xl font-bold text-gray-900">Pedido Registrado!</h2>
         <p className="text-gray-500 max-w-sm">Escaneie o QR Code abaixo no seu aplicativo de banco para finalizar o pagamento e ativar seu plano.</p>
         
-        {pixData.image && (
+        {!!pixData.image && (
           <div className="bg-white p-4 border rounded-2xl shadow-sm inline-block">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={pixData.image} alt="QR Code Pix" className="w-56 h-56 object-contain" />
+          </div>
+        )}
+
+        {!pixData.image && pixData.paymentLink && (
+          <div className="w-full max-w-[420px] bg-white border rounded-2xl shadow-sm overflow-hidden">
+            <iframe
+              title="Pagamento Pix"
+              src={pixData.paymentLink}
+              className="w-full h-[520px]"
+            />
           </div>
         )}
         
@@ -305,11 +515,12 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
             <input 
               type="text" 
               readOnly 
-              value={pixData.qrCode} 
+              value={pixData.qrCode || ""} 
               className="bg-transparent flex-1 px-4 py-3 text-sm text-gray-600 outline-none truncate" 
             />
             <button 
               onClick={handleCopyPix} 
+              disabled={!pixData.qrCode}
               className="p-3 bg-gray-100 hover:bg-gray-200 border-l transition-colors focus:ring-2 focus:ring-brand-wine focus:outline-none"
               title="Copiar código PIX"
             >
@@ -317,6 +528,37 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
             </button>
           </div>
         </div>
+
+        {pixData.status && (
+          <p className={cn("text-sm font-medium", pixApproved ? "text-green-700" : "text-gray-600")}>
+            Status: {pixApproved ? "Pagamento aprovado" : pixData.status}
+          </p>
+        )}
+
+        {pixApproved && (
+          <div className="w-full max-w-sm rounded-2xl border bg-white p-4 text-left space-y-2">
+            <p className="text-sm font-bold text-gray-900">Finalizando seu cadastro</p>
+            <p className="text-xs text-gray-500">
+              Estamos registrando seus dados no DataSys para ativar o plano.
+            </p>
+            {datasysState === "sending" && (
+              <div className="flex items-center gap-2 text-sm text-gray-700">
+                <Loader2 className="w-4 h-4 animate-spin" /> Enviando dados…
+              </div>
+            )}
+            {datasysState === "success" && (
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <CheckCircle className="w-4 h-4" /> Cadastro concluído com sucesso.
+              </div>
+            )}
+            {datasysState === "error" && (
+              <div className="text-sm text-red-600">
+                Não conseguimos finalizar automaticamente.
+                {datasysError ? <div className="text-xs text-red-500 mt-1">{datasysError}</div> : null}
+              </div>
+            )}
+          </div>
+        )}
         
         <Button onClick={() => setPixData(null)} variant="outline" className="mt-8 rounded-xl h-12 w-full max-w-sm">
            Voltar para formas de pagamento
@@ -465,7 +707,7 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
             <button
               key={opt.id}
               type="button"
-              onClick={() => setPaymentMethod(opt.id)}
+              onClick={() => { setPaymentMethod(opt.id); setPixData(null); }}
               className={cn(
                 "relative p-4 border-2 rounded-2xl flex flex-col items-center gap-2 transition-all",
                 paymentMethod === opt.id
@@ -499,6 +741,22 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
               <span className="ml-auto text-xs font-normal text-gray-500">Parcelado em até 12x</span>
             )}
           </h4>
+
+          {/* Recorrência no cartão (apenas mensal) */}
+          {cycle === "monthly" && (
+            <div
+              className="group p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 cursor-pointer flex items-center justify-between"
+              onClick={() => setIsRecurringCard((v) => !v)}
+            >
+              <div className="flex items-center gap-2">
+                <RefreshCcw className={cn("w-4 h-4", isRecurringCard ? "text-brand-wine" : "text-gray-400")} />
+                <span className="text-sm font-bold text-gray-900">Cobrança recorrente no cartão</span>
+              </div>
+              <div className={cn("w-12 h-6 rounded-full p-1 transition-colors", isRecurringCard ? "bg-brand-wine" : "bg-gray-300")}>
+                <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform", isRecurringCard ? "translate-x-6" : "translate-x-0")} />
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label className="text-sm text-gray-700">Número do Cartão</label>

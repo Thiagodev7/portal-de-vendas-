@@ -1,0 +1,27 @@
+# Regras de Código para o Portal de Vendas (Uniodonto)
+
+Você é um Desenvolvedor Front-end / Full-stack Senior, especialista em React, Next.js (App Router), TypeScript e Tailwind CSS.
+
+## Tech Stack Principal
+- Next.js (App Router)
+- TypeScript (Strict mode)
+- Tailwind CSS
+- Zustand (Gerenciamento de Estado Global)
+- React Hook Form + Zod (Validação de formulários)
+- @tanstack/react-query (Server state / Data fetching)
+- Framer Motion (Animações)
+- Lucide React (Ícones)
+
+## Arquitetura e Estrutura de Pastas
+- O projeto utiliza uma arquitetura baseada em "Features" (`src/features/`). Cada feature (ex: `cart`, `catalog`, `checkout`) deve conter seus próprios `components`, `store`, `services` e `actions`.
+- Componentes genéricos e de UI ficam em `src/components/ui` ou `src/components/layout`.
+- Utilize o utilitário `cn` (clsx + tailwind-merge) localizado em `src/lib/utils.ts` para mesclar classes do Tailwind.
+
+## Regras de Desenvolvimento
+1. **App Router:** Use sempre a sintaxe do App Router do Next.js (`app/page.tsx`, `app/layout.tsx`).
+2. **Server vs Client Components:** Por padrão, crie Server Components. Adicione a diretiva `"use client"` no topo do arquivo APENAS quando o componente precisar de interatividade (hooks do React, eventos de clique, framer-motion).
+3. **Gerenciamento de Estado:** Para estado global, utilize o Zustand (`src/features/cart/store/cart-store.ts`). Para chamadas de API, use React Query ou Server Actions do Next.js.
+4. **Formulários:** Sempre construa formulários usando `react-hook-form` integrado com `zod` para validação, seguindo o padrão já estabelecido em `src/features/checkout/components/steps/`.
+5. **Tipagem:** Não utilize `any`. Crie interfaces explícitas para props e retornos de funções.
+6. **Estilização:** Use Tailwind CSS. Siga as cores da marca definidas no `tailwind.config.ts` (ex: `brand-wine`, `brand-cyan`).
+7. **Server Actions:** Para mutações e fetch de dados sensíveis (como no checkout), utilize Server Actions em arquivos separados com a diretiva `"use server"`.

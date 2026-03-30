@@ -124,6 +124,9 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
       cpf: data.cpf.replace(/\D/g, ""),
       email: data.email,
       phone: data.phone.replace(/\D/g, ""),
+      birthDate: data.birthDate,
+      motherName: data.motherName,
+      sex: data.sex as "M" | "F",
     });
     await new Promise(resolve => setTimeout(resolve, 500));
     onNext();

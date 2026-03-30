@@ -5,7 +5,8 @@ import { z } from "zod";
 
 // --- Types & Schemas ---
 
-const pixPayloadSchema = z.object({
+const baseCelcoinPayloadSchema = z.object({
+  username: z.string(),
   customer: z.object({
     name: z.string(),
     cpf: z.string(),
@@ -20,36 +21,44 @@ const pixPayloadSchema = z.object({
     state: z.string().optional().default(""),
   }),
   plan: z.string(),
+  enrollment: z.number(), // em centavos (unitário)
+  monthly: z.number(), // em centavos (unitário)
   value: z.number(), // em centavos
+  numLives: z.number(),
+  numMonths: z.number(),
   myid: z.string().optional(),
+  dependent: z
+    .array(
+      z.object({
+        cpf: z.string(),
+        id_grau_dependencia: z.number(),
+      })
+    )
+    .optional(),
+  financialManager: z
+    .object({
+      cpf: z.string(),
+    })
+    .optional(),
+  nro_proposta: z.number().optional(),
 });
 
-const creditCardPayloadSchema = z.object({
-  customer: z.object({
-    name: z.string(),
-    cpf: z.string(),
-    email: z.string().optional().default(""),
-    phone: z.string(),
-    cep: z.string(),
-  }),
-  card: z.object({
-    name: z.string(),
-    number: z.string(),
-    holder: z.string(),
-    expirationMonth: z.string(),
-    expirationYear: z.string(),
-    cvv: z.string(),
-  }),
-  plan: z.string().optional(),
-  value: z.number(),
-  numMonths: z.number().optional(), // 12 for annual
-});
+const pixPayloadSchema = baseCelcoinPayloadSchema;
+const creditCardLinkPayloadSchema = baseCelcoinPayloadSchema;
+const recurringPayloadSchema = baseCelcoinPayloadSchema;
 
 type TransactionResponse = {
   success: boolean;
   data?: unknown;
   error?: string;
 };
+
+const insertClientPayloadSchema = z.object({
+  pessoa_titular: z.record(z.unknown()),
+  endereco: z.record(z.unknown()),
+  contato: z.array(z.record(z.unknown())),
+  contrato: z.record(z.unknown()),
+});
 
 // --- API Configuration ---
 
@@ -61,7 +70,7 @@ export async function processPixPayment(data: z.infer<typeof pixPayloadSchema>):
   try {
     const validated = pixPayloadSchema.parse(data);
 
-    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/pix`, {
+    const response = await fetch(`${API_URL}/celcoin/generatePixV2`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -91,16 +100,11 @@ export async function processPixPayment(data: z.infer<typeof pixPayloadSchema>):
   }
 }
 
-export async function processCreditCardPayment(data: z.infer<typeof creditCardPayloadSchema>): Promise<TransactionResponse> {
+export async function processCreditCardPayment(data: z.infer<typeof creditCardLinkPayloadSchema>): Promise<TransactionResponse> {
   try {
-    const validated = creditCardPayloadSchema.parse(data);
+    const validated = creditCardLinkPayloadSchema.parse(data);
     
-    // Decide endpoint based on recurrence or one-off
-    // For now assuming the standard credit-card endpoint handles one-off and annual installments
-    // If it's a subscription (recurrent monthly), we should use /subscription.
-    // Let's assume for now this action is for the 'credit-card' endpoint (Annual/One-off).
-    
-    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/credit-card`, {
+    const response = await fetch(`${API_URL}/celcoin/generateOneOffChargeLinkV2`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -130,11 +134,11 @@ export async function processCreditCardPayment(data: z.infer<typeof creditCardPa
   }
 }
 
-export async function processRecurringPayment(data: z.infer<typeof creditCardPayloadSchema>): Promise<TransactionResponse> {
+export async function processRecurringPayment(data: z.infer<typeof recurringPayloadSchema>): Promise<TransactionResponse> {
   try {
-    const validated = creditCardPayloadSchema.parse(data);
+    const validated = recurringPayloadSchema.parse(data);
 
-    const response = await fetch(`${API_URL}/portal-de-vendas/ecommerce/recurring`, {
+    const response = await fetch(`${API_URL}/celcoin/generateRecurringSubscriptionV2`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -161,5 +165,64 @@ export async function processRecurringPayment(data: z.infer<typeof creditCardPay
         errorMessage = error.message;
     }
     return { success: false, error: errorMessage };
+  }
+}
+
+export async function getCelcoinTransactionStatus(myId: string): Promise<TransactionResponse> {
+  try {
+    const validatedMyId = z.string().min(5).parse(myId);
+
+    const response = await fetch(`${API_URL}/celcoin/postTransactionStatus`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_TOKEN}`,
+      },
+      body: JSON.stringify({ myId: validatedMyId }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage =
+        errorData && typeof errorData === "object" && "error" in errorData
+          ? String((errorData as { error?: unknown }).error)
+          : `Erro HTTP ${response.status}`;
+      return { success: false, error: errorMessage };
+    }
+
+    const result = await response.json();
+    return { success: true, data: result };
+  } catch (error: unknown) {
+    console.error("Transaction Status Error:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Erro desconhecido" };
+  }
+}
+
+export async function insertDatasysClient(payload: z.infer<typeof insertClientPayloadSchema>): Promise<TransactionResponse> {
+  try {
+    const validated = insertClientPayloadSchema.parse(payload);
+    const response = await fetch(`${API_URL}/datanext/insertClient`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_TOKEN}`,
+      },
+      body: JSON.stringify(validated),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage =
+        errorData && typeof errorData === "object" && "error" in errorData
+          ? String((errorData as { error?: unknown }).error)
+          : `Erro HTTP ${response.status}`;
+      return { success: false, error: errorMessage, data: errorData };
+    }
+
+    const result = await response.json();
+    return { success: true, data: result };
+  } catch (error: unknown) {
+    console.error("Insert Datasys Client Error:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Erro desconhecido" };
   }
 }

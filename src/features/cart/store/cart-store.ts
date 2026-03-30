@@ -17,6 +17,10 @@ export interface HolderInfo {
   cpf: string;
   email: string;
   phone: string;
+  birthDate: string; // YYYY-MM-DD
+  motherName?: string;
+  sex: "M" | "F";
+  cns?: string;
 }
 
 // Tipo para o Endereço do Titular
@@ -28,6 +32,8 @@ export interface AddressInfo {
   city: string;
   uf: string;
   complement?: string;
+  cityId?: number; // IBGE
+  streetTypeId?: number; // Datasys id_tipo_logradouro
 }
 
 interface CartState {

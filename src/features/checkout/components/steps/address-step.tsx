@@ -74,6 +74,7 @@ export function AddressStep({ onNext, onBack }: AddressStepProps) {
   };
 
   const onSubmit = async (data: AddressForm) => {
+    const coverage = await validateZipCode(data.cep);
     // Persiste o endereço no cart store para uso no PaymentStep (Celcoin debtor)
     setAddress({
       cep: data.cep.replace(/\D/g, ""),
@@ -83,6 +84,8 @@ export function AddressStep({ onNext, onBack }: AddressStepProps) {
       city: data.city,
       uf: data.uf,
       complement: data.complement,
+      cityId: coverage.cityId,
+      streetTypeId: coverage.streetTypeId,
     });
     await new Promise(resolve => setTimeout(resolve, 300));
     onNext();
