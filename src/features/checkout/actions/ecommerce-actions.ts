@@ -54,10 +54,10 @@ type TransactionResponse = {
 };
 
 const insertClientPayloadSchema = z.object({
-  pessoa_titular: z.record(z.unknown()),
-  endereco: z.record(z.unknown()),
-  contato: z.array(z.record(z.unknown())),
-  contrato: z.record(z.unknown()),
+  pessoa_titular: z.record(z.string(), z.unknown()),
+  endereco: z.record(z.string(), z.unknown()),
+  contato: z.array(z.record(z.string(), z.unknown())),
+  contrato: z.record(z.string(), z.unknown()),
 });
 
 // --- API Configuration ---

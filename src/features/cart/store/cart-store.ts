@@ -45,6 +45,7 @@ interface CartState {
   holder: HolderInfo | null;
 
   setPlan: (plan: IPlan, cycle: 'monthly' | 'yearly') => void;
+  setBillingCycle: (cycle: 'monthly' | 'yearly') => void;
   setDependentsCount: (count: number) => void;
   setPayer: (payer: PayerInfo) => void;
   setAddress: (address: AddressInfo) => void;
@@ -63,6 +64,7 @@ export const useCartStore = create<CartState>()(
       holder: null,
 
       setPlan: (plan, cycle) => set({ selectedPlan: plan, billingCycle: cycle }),
+      setBillingCycle: (cycle) => set({ billingCycle: cycle }),
       setDependentsCount: (count) => set({ dependentsCount: count }),
       setPayer: (payer) => set({ payer }),
       setAddress: (address) => set({ address }),

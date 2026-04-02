@@ -99,7 +99,7 @@ export function AddressStep({ onNext, onBack }: AddressStepProps) {
          </div>
          <div>
              <h2 className="text-xl font-bold text-gray-900">Endereço do Titular</h2>
-             <p className="text-sm text-gray-500">Para envio da carteirinha e contrato.</p>
+             <p className="text-sm text-gray-500">Informe o endereço para cadastro.</p>
          </div>
       </div>
 

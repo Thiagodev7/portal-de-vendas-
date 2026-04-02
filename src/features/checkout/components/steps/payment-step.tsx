@@ -3,13 +3,20 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import {
+  AlertTriangle,
+  BookOpen,
   CalendarDays,
   CheckCircle,
   Copy,
   CreditCard,
+  Download,
+  FileText,
   Loader2,
+  Mail,
+  PartyPopper,
   RefreshCcw,
   Search,
+  ShieldCheck,
   User,
   Wallet,
 } from "lucide-react";
@@ -27,6 +34,16 @@ import { cn } from "@/lib/utils";
 // ─── Types ────────────────────────────────────────────────────────────────────
 type BillingCycle = "monthly" | "yearly";
 type PaymentMethod = "credit_card" | "pix" | null;
+
+// ─── Mapeamento DataSys por plano ────────────────────────────────────────────
+// Fonte: integrador/prod/datanext/utils/jsonUtil.js (getPlanCod / getContractCod)
+const DATASYS_PLAN_MAP: Record<string, { contractId: number; planId: number }> = {
+  "quality":      { contractId: 56429, planId: 1699 },
+  "quality-plus": { contractId: 56430, planId: 1700 },
+  "smart":        { contractId: 56833, planId: 1713 },
+  "kids":         { contractId: 56832, planId: 1707 },
+  "light-plus":   { contractId: 56834, planId: 1709 },
+};
 
 const formSchema = z.object({
   // Dados do pagador (só quando diferente do titular)
@@ -64,7 +81,7 @@ const PAYMENT_OPTIONS: Record<
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function PaymentStep({ onBack }: PaymentStepProps) {
-  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount, address, holder } = useCartStore();
+  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount, address, holder, setBillingCycle } = useCartStore();
 
   // A seleção de ciclo pode ser sobrescrita pelo usuário neste step
   const [cycle, setCycle] = useState<BillingCycle>(storeCycle as BillingCycle ?? "monthly");
@@ -94,6 +111,8 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
   const [pixApproved, setPixApproved] = useState(false);
   const [datasysState, setDatasysState] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [datasysError, setDatasysError] = useState<string | null>(null);
+  const [memberCardNumber, setMemberCardNumber] = useState<string | null>(null);
+  const [emailState, setEmailState] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   const handleCopyPix = () => {
     if (pixData?.qrCode) {
@@ -169,14 +188,15 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       if (datasysState !== "idle") return;
       if (!holder || !address || !selectedPlan) return;
 
-      const contractId = Number(process.env.UNIODONTO_DATASYS_CONTRACT_ID);
-      const planId = Number(process.env.UNIODONTO_DATASYS_PLAN_ID);
-      if (!Number.isFinite(contractId) || !Number.isFinite(planId)) {
+      const datasysIds = DATASYS_PLAN_MAP[selectedPlan.id];
+      if (!datasysIds) {
         setDatasysState("error");
-        setDatasysError("Configuração ausente: IDs do contrato/plano do DataSys.");
-        toast.error("Não foi possível finalizar", { description: "IDs do contrato/plano do DataSys não configurados." });
+        setDatasysError(`Plano "${selectedPlan.id}" não possui mapeamento DataSys.`);
+        toast.error("Não foi possível finalizar", { description: `Plano sem mapeamento DataSys: ${selectedPlan.id}` });
         return;
       }
+      const contractId = datasysIds.contractId;
+      const planId = datasysIds.planId;
 
       const toDdMmYyyy = (iso: string) => {
         const [y, m, d] = String(iso || "").split("-");
@@ -254,8 +274,17 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       const { insertDatasysClient } = await import("@/features/checkout/actions/ecommerce-actions");
       const res = await insertDatasysClient(payload);
       if (res.success) {
+        // Tenta capturar o número da carteirinha retornado pelo DataSys
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = res.data as any;
+        const cardNum =
+          d?.titular?.id_pessoa_contrato ||
+          d?.titular?.id_pessoa_contrato_titular ||
+          d?.id_pessoa_contrato ||
+          null;
+        if (cardNum) setMemberCardNumber(String(cardNum));
         setDatasysState("success");
-        toast.success("Cadastro concluído! Seu plano está sendo ativado.");
+        toast.success("Bem-vindo à Uniodonto Goiânia! Seu plano está ativo.");
       } else {
         setDatasysState("error");
         setDatasysError(res.error || "Erro ao inserir no DataSys");
@@ -265,6 +294,31 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
 
     run();
   }, [pixApproved, datasysState, holder, address, selectedPlan]);
+
+  // Após cadastro no DataSys confirmado, envia e-mail de boas-vindas com o manual
+  useEffect(() => {
+    const sendEmail = async () => {
+      if (datasysState !== "success") return;
+      if (emailState !== "idle") return;
+      if (!holder?.email) return;
+
+      setEmailState("sending");
+      // try {
+      //   const { sendWelcomeEmail } = await import("@/features/checkout/actions/send-welcome-email");
+      //   // const result = await sendWelcomeEmail({
+      //   //   toEmail: holder.email,
+      //   //   holderName: holder.name,
+      //   //   planName: selectedPlan?.name || "",
+      //   //   memberCard: memberCardNumber,
+      //   // });
+      //   setEmailState(result.success ? "sent" : "error");
+      // } catch {
+      //   setEmailState("error");
+      // }
+    };
+
+    sendEmail();
+  }, [datasysState, emailState, holder, selectedPlan, memberCardNumber]);
 
   // ── CPF lookup ─────────────────────────────────────────────────────────────
   const cpfMutation = useMutation({
@@ -479,6 +533,263 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       ? "Contratar Recorrência"
       : "Pagar e Finalizar";
 
+  // ── Tela de Boas-Vindas (pós cadastro DataSys aprovado) ───────────────────
+  if (datasysState === "success") {
+    return (
+      <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+
+        {/* Header comemorativo */}
+        <div className="text-center space-y-3">
+          <div className="flex justify-center">
+            <div className="bg-gradient-to-br from-brand-wine to-brand-wine/70 p-5 rounded-full shadow-lg">
+              <PartyPopper className="w-10 h-10 text-white" />
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900">Bem-vindo à Uniodonto Goiânia!</h2>
+          <p className="text-gray-500 text-sm max-w-sm mx-auto">
+            Seu plano foi ativado com sucesso. Abaixo estão as informações do seu cadastro.
+          </p>
+        </div>
+
+        {/* Card da Carteirinha */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-wine via-brand-wine/90 to-brand-wine/70 p-6 text-white shadow-xl">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full -translate-y-16 translate-x-16" />
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-12 -translate-x-12" />
+          <div className="relative space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-6 h-6 text-white/80" />
+                <span className="text-xs font-bold uppercase tracking-widest text-white/70">Uniodonto Goiânia</span>
+              </div>
+              <span className="text-xs bg-white/20 px-2 py-1 rounded-full font-medium">{selectedPlan?.name}</span>
+            </div>
+            <div>
+              <p className="text-xs text-white/60 mb-1">Beneficiário Titular</p>
+              <p className="text-lg font-bold">{holder?.name || "—"}</p>
+            </div>
+            {memberCardNumber ? (
+              <div>
+                <p className="text-xs text-white/60 mb-1">Nº da Carteirinha</p>
+                <p className="text-2xl font-mono font-bold tracking-widest">{memberCardNumber}</p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-xs text-white/60 mb-1">Nº da Carteirinha</p>
+                <p className="text-sm text-white/80 italic">Será enviado por e-mail em breve</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Status do E-mail de Boas-Vindas */}
+        <div className={cn(
+          "rounded-2xl border p-4 flex items-center gap-3 transition-all",
+          emailState === "sent"
+            ? "border-green-200 bg-green-50"
+            : emailState === "error"
+            ? "border-red-200 bg-red-50"
+            : "border-blue-200 bg-blue-50"
+        )}>
+          <div className={cn(
+            "p-2 rounded-full shrink-0",
+            emailState === "sent" ? "bg-green-100" : emailState === "error" ? "bg-red-100" : "bg-blue-100"
+          )}>
+            {emailState === "sending" ? (
+              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+            ) : emailState === "sent" ? (
+              <Mail className="w-4 h-4 text-green-600" />
+            ) : emailState === "error" ? (
+              <Mail className="w-4 h-4 text-red-500" />
+            ) : (
+              <Mail className="w-4 h-4 text-blue-600" />
+            )}
+          </div>
+          <div>
+            {emailState === "sending" && (
+              <>
+                <p className="text-sm font-bold text-blue-900">Enviando e-mail de boas-vindas…</p>
+                <p className="text-xs text-blue-700">Aguarde, estamos enviando o Manual do Cliente para {holder?.email}</p>
+              </>
+            )}
+            {emailState === "sent" && (
+              <>
+                <p className="text-sm font-bold text-green-800">E-mail enviado com sucesso! 📬</p>
+                <p className="text-xs text-green-700">O Manual do Cliente foi enviado para <strong>{holder?.email}</strong></p>
+              </>
+            )}
+            {emailState === "error" && (
+              <>
+                <p className="text-sm font-bold text-red-800">Falha ao enviar e-mail</p>
+                <p className="text-xs text-red-600">Não foi possível enviar automaticamente. Baixe o manual abaixo.</p>
+              </>
+            )}
+            {emailState === "idle" && (
+              <p className="text-sm text-blue-700">Preparando envio do e-mail de boas-vindas…</p>
+            )}
+          </div>
+        </div>
+
+        {/* Download do Manual */}
+        <a href="/MANUAL_DO_CLIENTE.pdf" download="Manual_do_Cliente_Uniodonto.pdf"
+          className="flex items-center gap-3 w-full rounded-2xl border-2 border-brand-wine/30 bg-brand-wine/5 p-4 hover:bg-brand-wine/10 hover:border-brand-wine/60 transition-all group">
+          <div className="bg-brand-wine/10 p-2 rounded-full group-hover:bg-brand-wine/20 transition-colors">
+            <BookOpen className="w-5 h-5 text-brand-wine" />
+          </div>
+          <div className="text-left flex-1">
+            <p className="font-bold text-brand-wine text-sm">Manual do Cliente — Baixar PDF completo</p>
+            <p className="text-xs text-brand-wine/70 font-normal">Benefícios, rede credenciada, app e mais</p>
+          </div>
+          <Download className="w-4 h-4 text-brand-wine/60 group-hover:text-brand-wine transition-colors" />
+        </a>
+
+        {/* App Móvel */}
+        <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+          <div className="bg-indigo-50 px-5 py-3 border-b border-indigo-100">
+            <h3 className="font-bold text-indigo-800 text-sm">📱 Aplicativo Uniodonto Goiânia</h3>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-gray-50 rounded-xl p-3 text-center space-y-1">
+                <p className="text-2xl">🤖</p>
+                <p className="text-xs font-bold text-gray-800">Android</p>
+                <p className="text-[10px] text-gray-500">Google Play Store</p>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3 text-center space-y-1">
+                <p className="text-2xl">🍎</p>
+                <p className="text-xs font-bold text-gray-800">iOS (iPhone)</p>
+                <p className="text-[10px] text-gray-500">App Store</p>
+              </div>
+            </div>
+            <ul className="space-y-1.5 text-xs text-gray-600">
+              {["💳 Carteirinha virtual digital","🔍 Busca de dentistas por especialidade e localização","💬 Atendimento online com um atendente","📄 Segunda via de boletos e extratos de utilização"].map((item, i) => <li key={i}>{item}</li>)}
+            </ul>
+            <div className="bg-indigo-50 rounded-xl p-3">
+              <p className="text-xs font-bold text-indigo-800 mb-1">Portal do Beneficiário — Primeiro Acesso:</p>
+              <ol className="text-xs text-indigo-700 space-y-1">
+                {["Acesse uniodontogoiania.coop.br","Clique em \"Portal do Beneficiário\"","Selecione \"Primeiro Acesso\"","Informe CPF e data de nascimento","Receba o código por WhatsApp ou e-mail","Pronto! Acesso liberado."].map((step, i) => <li key={i} className="flex gap-1"><span className="font-bold shrink-0">{i+1}.</span>{step}</li>)}
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        {/* Contatos */}
+        <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+          <div className="bg-green-50 px-5 py-3 border-b border-green-100">
+            <h3 className="font-bold text-green-800 text-sm">📞 Central de Atendimento</h3>
+          </div>
+          <div className="p-5 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <a href="tel:6232549100" className="bg-green-50 rounded-xl p-3 text-center hover:bg-green-100 transition-colors">
+                <p className="text-lg">📞</p><p className="text-xs font-bold text-green-900">(62) 3254-9100</p>
+              </a>
+              <a href="tel:08009419192" className="bg-green-50 rounded-xl p-3 text-center hover:bg-green-100 transition-colors">
+                <p className="text-lg">📞</p><p className="text-xs font-bold text-green-900">0800 941-9192</p><p className="text-[10px] text-green-700">Gratuito</p>
+              </a>
+            </div>
+            <p className="text-xs text-gray-600 bg-gray-50 rounded-xl p-3">🕐 Atendimento: <strong>seg. a sex., das 8h às 18h</strong></p>
+            <a href="mailto:contato@uniodontogoiania.com.br" className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl p-3 hover:bg-blue-100 transition-colors">
+              <Mail className="w-3.5 h-3.5 shrink-0" />contato@uniodontogoiania.com.br
+            </a>
+          </div>
+        </div>
+
+        {/* Plantões 24h */}
+        <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+          <div className="bg-red-50 px-5 py-3 border-b border-red-100">
+            <h3 className="font-bold text-red-800 text-sm">🏥 Endereços e Plantões 24h</h3>
+          </div>
+          <div className="p-5 space-y-3 text-xs text-gray-700">
+            <div>
+              <p className="font-bold text-gray-900">Goiânia — Sede Administrativa</p>
+              <p className="text-gray-600">Rua T-27, Nº 1115, St. Bueno — CEP 74215-030 · (62) 3254-9100</p>
+            </div>
+            <div className="border-t border-gray-100 pt-3">
+              <p className="font-bold text-red-700">🚨 Plantão 24h — Goiânia</p>
+              <p className="text-gray-600">Rua T-27, Nº 1.190, Setor Bueno — CEP 74215-030</p>
+            </div>
+            <div className="border-t border-gray-100 pt-3">
+              <p className="font-bold text-red-700 mb-2">🚨 Plantão 24h — Anápolis</p>
+              {[
+                {name:"Dr. Bruno / Dr. Breno Lacerda",clinic:"Ateliê Odontorriso",phone:"(62) 3324-5133",addr:"Av. Coronel Batista, Nº 280, Setor Central"},
+                {name:"Dra. Patrícia Zillmer de Alcântara",clinic:"Sorria Health Care",phone:"(62) 3314-1222",addr:"Av. Jamel Cecílio, Qd. 61, Lt. 12, Sala 101, JK Nova Capital"},
+              ].map((p,i)=>(
+                <div key={i} className="bg-red-50/60 rounded-xl p-3 mb-2">
+                  <p className="font-bold text-gray-900">{p.name}</p>
+                  <p className="text-gray-600">{p.clinic} · {p.phone}</p>
+                  <p className="text-gray-500 text-[10px] mt-0.5">{p.addr}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Ouvidoria */}
+        <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+          <div className="bg-purple-50 px-5 py-3 border-b border-purple-100">
+            <h3 className="font-bold text-purple-800 text-sm">🗣️ Ouvidoria</h3>
+          </div>
+          <div className="p-5 space-y-2 text-xs text-gray-700">
+            <p className="text-gray-600">Canal de 2ª instância para mediação de conflitos. Tenha o número de protocolo do atendimento anterior em mãos.</p>
+            <a href="https://uniodontogoiania.coop.br/ouvidoria/" target="_blank" rel="noopener noreferrer" className="block text-purple-700 hover:underline">🌐 uniodontogoiania.coop.br/ouvidoria/</a>
+            <a href="mailto:ouvidoria@uniodontogoiania.com.br" className="flex items-center gap-1 text-purple-700 hover:underline"><Mail className="w-3 h-3" />ouvidoria@uniodontogoiania.com.br</a>
+            <p className="text-gray-500">📍 Rua T-27 nº 1.115, Setor Bueno — Goiânia/GO</p>
+          </div>
+        </div>
+
+        {/* Alerta Boleto */}
+        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-3">
+          <p className="font-bold text-amber-900 text-sm flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-600" />Atenção — Evite Golpes de Boleto</p>
+          <ul className="space-y-1.5">
+            {["Emita boletos apenas pelos canais oficiais","Central: (62) 3254-9100 | 0800 941-9192","Verifique o código de barras antes de pagar","E-mail oficial: @uniodonto.com.br ou @uniodonto.coop.br"].map((item,i)=>(
+              <li key={i} className="flex items-start gap-2 text-xs text-amber-800"><span className="text-amber-600 font-bold">✓</span>{item}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-amber-700 border-t border-amber-200 pt-2">Segunda via de boleto: <strong>app</strong> ou <strong>Portal do Beneficiário</strong>.</p>
+        </div>
+
+        {/* Redes Sociais */}
+        <div className="rounded-2xl border border-gray-100 bg-white p-5">
+          <p className="text-sm font-bold text-gray-800 mb-3">🌐 Siga a Uniodonto Goiânia</p>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              {label:"Facebook",handle:"@uniodontogoiania",url:"https://facebook.com/uniodontogoiania",emoji:"📘"},
+              {label:"Instagram",handle:"@uniodontogoiania",url:"https://instagram.com/uniodontogoiania",emoji:"📸"},
+              {label:"LinkedIn",handle:"uniodonto-goiania",url:"https://linkedin.com/in/uniodonto-goiania",emoji:"💼"},
+              {label:"YouTube",handle:"UniodontoGoiania",url:"https://youtube.com/UniodontoGoiania",emoji:"▶️"},
+            ].map((s,i)=>(
+              <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5 hover:bg-gray-100 transition-colors">
+                <span className="text-base">{s.emoji}</span>
+                <div><p className="text-xs font-bold text-gray-800">{s.label}</p><p className="text-[10px] text-gray-500">{s.handle}</p></div>
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Documentos obrigatórios */}
+        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="bg-amber-100 p-2 rounded-full shrink-0 mt-0.5">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <p className="font-bold text-amber-900 text-sm">Envio de documentos obrigatório</p>
+              <p className="text-xs text-amber-700 mt-1">Para a <strong>ativação completa</strong>, envie os documentos abaixo.</p>
+            </div>
+          </div>
+          <ul className="space-y-2">
+            {["RG ou CNH (frente e verso)","CPF (ou documento que contenha o CPF)","Comprovante de residência (últimos 90 dias)","Foto 3x4 ou selfie recente"].map((label,i)=>(
+              <li key={i} className="flex items-center gap-2.5 text-sm text-amber-800"><FileText className="w-4 h-4 text-amber-600 shrink-0" />{label}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-amber-600 border-t border-amber-200 pt-2 font-medium">
+            📧 <a href="mailto:documentos@uniodonto.com.br" className="underline">documentos@uniodonto.com.br</a> — informe nome e nº de carteirinha no assunto.
+          </p>
+        </div>
+
+      </div>
+    );
+  }
+
   if (pixData) {
     return (
       <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500 text-center flex flex-col items-center">
@@ -546,11 +857,6 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
                 <Loader2 className="w-4 h-4 animate-spin" /> Enviando dados…
               </div>
             )}
-            {datasysState === "success" && (
-              <div className="flex items-center gap-2 text-sm text-green-700">
-                <CheckCircle className="w-4 h-4" /> Cadastro concluído com sucesso.
-              </div>
-            )}
             {datasysState === "error" && (
               <div className="text-sm text-red-600">
                 Não conseguimos finalizar automaticamente.
@@ -589,7 +895,7 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
             <button
               key={c}
               type="button"
-              onClick={() => { setCycle(c); setPaymentMethod(null); }}
+              onClick={() => { setCycle(c); setBillingCycle(c); setPaymentMethod(null); }}
               className={cn(
                 "p-4 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all h-full",
                 cycle === c
