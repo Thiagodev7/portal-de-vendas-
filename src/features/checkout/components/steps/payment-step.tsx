@@ -10,11 +10,9 @@ import {
   Copy,
   CreditCard,
   Download,
-  FileText,
   Loader2,
   Mail,
   PartyPopper,
-  RefreshCcw,
   Search,
   ShieldCheck,
   User,
@@ -35,15 +33,22 @@ import { cn } from "@/lib/utils";
 type BillingCycle = "monthly" | "yearly";
 type PaymentMethod = "credit_card" | "pix" | null;
 
-// ─── Mapeamento DataSys por plano ────────────────────────────────────────────
-// Fonte: integrador/prod/datanext/utils/jsonUtil.js (getPlanCod / getContractCod)
-const DATASYS_PLAN_MAP: Record<string, { contractId: number; planId: number }> = {
-  "quality":      { contractId: 56429, planId: 1699 },
-  "quality-plus": { contractId: 56430, planId: 1700 },
-  "smart":        { contractId: 56833, planId: 1713 },
-  "kids":         { contractId: 56832, planId: 1707 },
-  "light-plus":   { contractId: 56834, planId: 1709 },
-};
+// ─── Detecta menor de 18 anos a partir da data ISO (YYYY-MM-DD) ─────────────────
+function isHolderMinor(birthDateIso: string | undefined): boolean {
+  if (!birthDateIso) return false;
+  const [y, m, d] = birthDateIso.split("-").map(Number);
+  if (!y || !m || !d) return false;
+  const today = new Date();
+  const birth = new Date(y, m - 1, d);
+  let age = today.getFullYear() - birth.getFullYear();
+  const diff = today.getMonth() - birth.getMonth();
+  if (diff < 0 || (diff === 0 && today.getDate() < birth.getDate())) age--;
+  return age < 18;
+}
+
+// ─── IDs DataSys agora vêm direto do plano selecionado (selectedPlan.nroContrato / datasysPlanId)
+// Fonte original: integrador/prod/datanext/utils/jsonUtil.js (getPlanCod / getContractCod)
+// Os IDs são populados no IPlan via mock-plans.ts ou via backend /database/valoresContrato
 
 const formSchema = z.object({
   // Dados do pagador (só quando diferente do titular)
@@ -81,13 +86,16 @@ const PAYMENT_OPTIONS: Record<
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function PaymentStep({ onBack }: PaymentStepProps) {
-  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount, address, holder, setBillingCycle } = useCartStore();
+  const { payer, setPayer, selectedPlan, billingCycle: storeCycle, dependentsCount, address, holder, setBillingCycle, uploadedDocuments } = useCartStore();
 
   // A seleção de ciclo pode ser sobrescrita pelo usuário neste step
   const [cycle, setCycle] = useState<BillingCycle>(storeCycle as BillingCycle ?? "monthly");
-  const [isHolderPayer, setIsHolderPayer] = useState(payer.isHolder);
+
+  // Detecta se o titular é menor de idade — nesse caso o titular não pode ser o pagador
+  const holderIsMinor = isHolderMinor(holder?.birthDate);
+
+  const [isHolderPayer, setIsHolderPayer] = useState(holderIsMinor ? false : payer.isHolder);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null);
-  const [isRecurringCard, setIsRecurringCard] = useState(false);
 
   const {
     register,
@@ -108,11 +116,14 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     status?: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [pixApproved, setPixApproved] = useState(false);
+  const [paymentApproved, setPaymentApproved] = useState(false);
   const [datasysState, setDatasysState] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [datasysError, setDatasysError] = useState<string | null>(null);
   const [memberCardNumber, setMemberCardNumber] = useState<string | null>(null);
+  const [idPessoa, setIdPessoa] = useState<number | null>(null);
   const [emailState, setEmailState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [docsUploadState, setDocsUploadState] = useState<"idle" | "uploading" | "done" | "error">("idle");
+  const [nroProposta, setNroProposta] = useState<number | null>(null);
 
   const handleCopyPix = () => {
     if (pixData?.qrCode) {
@@ -163,7 +174,7 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           normalized.includes("payexternal");
 
         if (isPaid) {
-          setPixApproved(true);
+          setPaymentApproved(true);
           toast.success("Pagamento Pix aprovado!");
           if (interval) clearInterval(interval);
         }
@@ -181,28 +192,24 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     };
   }, [pixData?.myId]);
 
-  // Após pagamento aprovado, envia inserção no DataSys via /datanext/insertClient
+  // Após pagamento aprovado: 1) Cria proposta no banco  2) Envia inserção no DataSys
   useEffect(() => {
     const run = async () => {
-      if (!pixApproved) return;
+      if (!paymentApproved) return;
       if (datasysState !== "idle") return;
       if (!holder || !address || !selectedPlan) return;
 
-      const datasysIds = DATASYS_PLAN_MAP[selectedPlan.id];
-      if (!datasysIds) {
+      // IDs do banco (para proposta)
+      const dbNroContrato = selectedPlan.nroContrato;
+      // IDs DataSys (para insertClient)
+      const datasysContractId = selectedPlan.datasysContractId;
+      const datasysPlanId = selectedPlan.datasysPlanId;
+      if (!dbNroContrato || !datasysContractId || !datasysPlanId) {
         setDatasysState("error");
-        setDatasysError(`Plano "${selectedPlan.id}" não possui mapeamento DataSys.`);
-        toast.error("Não foi possível finalizar", { description: `Plano sem mapeamento DataSys: ${selectedPlan.id}` });
+        setDatasysError(`Plano "${selectedPlan.id}" não possui IDs completos (nroContrato/datasysContractId/datasysPlanId).`);
+        toast.error("Não foi possível finalizar", { description: `Plano sem IDs: ${selectedPlan.id}` });
         return;
       }
-      const contractId = datasysIds.contractId;
-      const planId = datasysIds.planId;
-
-      const toDdMmYyyy = (iso: string) => {
-        const [y, m, d] = String(iso || "").split("-");
-        if (!y || !m || !d) return "";
-        return `${d}-${m}-${y}`;
-      };
 
       const cpfDigits = holder.cpf.replace(/\D/g, "");
       const cepDigits = address.cep.replace(/\D/g, "");
@@ -210,8 +217,67 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       const ddd = phoneDigits.slice(0, 2);
       const phone = phoneDigits.slice(2);
 
+      // ── 1. Cria a proposta no banco (aparece no dashboard) ──────────────
+      try {
+        const { createWebProposal } = await import("@/features/checkout/actions/ecommerce-actions");
+        const pricing = calculateCheckout(selectedPlan.id, dependentsCount, cycle);
+
+        const propostaRes = await createWebProposal({
+          titular: { cpf: cpfDigits, estado_civil: 6 },
+          responsavel_financeiro: !isHolderPayer && payer.cpf
+            ? { cpf: payer.cpf.replace(/\D/g, ""), estado_civil: 6 }
+            : null,
+          plano: {
+            nro_contrato: dbNroContrato,
+            id_plano: datasysPlanId,
+            is_anual: cycle === "yearly",
+            dia_vencimento: 10,
+          },
+          endereco: {
+            cep: cepDigits,
+            numero: address.number,
+            complemento: address.complement || "",
+            logradouro: address.street,
+            bairro: address.neighborhood,
+            nome_cidade: address.city,
+            sigla_uf: address.uf,
+          },
+          contatos: [
+            { meio_comunicacao_id: 1, descricao: phone, nome_contato: holder.name },
+            { meio_comunicacao_id: 5, descricao: holder.email, nome_contato: holder.name },
+          ],
+          valor_venda: pricing.totalDueNow,
+          forma_pagamento: pixData ? "pix" : "credit_card",
+          gateway_pagamento_id: pixData?.myId || undefined,
+        });
+
+        if (propostaRes.success) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const nro = (propostaRes.data as any)?.nro_proposta;
+          if (nro) {
+            setNroProposta(Number(nro));
+            console.log("[Checkout] Proposta criada:", nro);
+
+            // Marca pagamento como concluído
+            const { updateProposalStatus: updateStatus } = await import("@/features/checkout/actions/ecommerce-actions");
+            await updateStatus(Number(nro), { pagamentoConcluido: true });
+          }
+        } else {
+          console.error("[Checkout] Falha ao criar proposta:", propostaRes.error);
+        }
+      } catch (err) {
+        console.error("[Checkout] Erro ao criar proposta:", err);
+      }
+
+      // ── 2. Integração DataSys ──────────────────────────────────────────
       setDatasysState("sending");
       setDatasysError(null);
+
+      const toDdMmYyyy = (iso: string) => {
+        const [y, m, d] = String(iso || "").split("-");
+        if (!y || !m || !d) return "";
+        return `${d}-${m}-${y}`;
+      };
 
       const payload = {
         pessoa_titular: {
@@ -258,8 +324,8 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           },
         ],
         contrato: {
-          id_contrato: contractId,
-          id_plano: planId,
+          id_contrato: datasysContractId,
+          id_plano: datasysPlanId,
           id_tipo_cobranca: 8,
           dia_vencimento: 10,
           data_adesao_contratual: toDdMmYyyy(new Date().toISOString().slice(0, 10)),
@@ -282,18 +348,88 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           d?.titular?.id_pessoa_contrato_titular ||
           d?.id_pessoa_contrato ||
           null;
+        // Captura id_pessoa para o upload de documentos
+        const idPessoaVal =
+          d?.titular?.id_pessoa ||
+          d?.id_pessoa ||
+          null;
         if (cardNum) setMemberCardNumber(String(cardNum));
+        if (idPessoaVal) setIdPessoa(Number(idPessoaVal));
         setDatasysState("success");
         toast.success("Bem-vindo à Uniodonto Goiânia! Seu plano está ativo.");
+
+        // Atualiza proposta com dados do DataSys
+        if (nroProposta) {
+          const { updateProposalIntegration } = await import("@/features/checkout/actions/ecommerce-actions");
+          await updateProposalIntegration(nroProposta, {
+            datasys_status: "sucesso",
+            datasys_id_pessoa: idPessoaVal ? Number(idPessoaVal) : undefined,
+            datasys_carteirinha: cardNum ? String(cardNum) : undefined,
+            log_entry: { event: "datasys_ok", detail: "Inserção DataSys concluída" },
+          });
+        }
       } else {
         setDatasysState("error");
         setDatasysError(res.error || "Erro ao inserir no DataSys");
         toast.error("Falha ao finalizar cadastro", { description: res.error });
+
+        // Registra erro na proposta
+        if (nroProposta) {
+          const { updateProposalIntegration } = await import("@/features/checkout/actions/ecommerce-actions");
+          await updateProposalIntegration(nroProposta, {
+            datasys_status: "erro",
+            log_entry: { event: "datasys_error", detail: res.error || "Erro DataSys" },
+          });
+        }
       }
     };
 
     run();
-  }, [pixApproved, datasysState, holder, address, selectedPlan]);
+  }, [paymentApproved, datasysState, holder, address, selectedPlan]);
+
+  // Após cadastro no DataSys confirmado, envia os documentos ao DataSys
+  useEffect(() => {
+    const sendDocs = async () => {
+      if (datasysState !== "success") return;
+      if (docsUploadState !== "idle") return;
+      if (!idPessoa && uploadedDocuments.length === 0) return;
+      if (uploadedDocuments.length === 0) return;
+      if (!idPessoa) {
+        // id_pessoa não veio na resposta — tenta usar memberCardNumber como fallback
+        console.warn("[DocumentUpload] id_pessoa não disponível, pulando envio de documentos.");
+        setDocsUploadState("done");
+        return;
+      }
+
+      setDocsUploadState("uploading");
+      try {
+        const { uploadBeneficiaryDocuments } = await import("@/features/checkout/actions/upload-documents");
+        const { results, allSuccess } = await uploadBeneficiaryDocuments(idPessoa, uploadedDocuments);
+        setDocsUploadState(allSuccess ? "done" : "error");
+        const failed = results.filter((r) => !r.success);
+        if (allSuccess) {
+          toast.success("Documentos enviados com sucesso!");
+          // Atualiza proposta: documentos enviados
+          if (nroProposta) {
+            const { updateProposalIntegration } = await import("@/features/checkout/actions/ecommerce-actions");
+            await updateProposalIntegration(nroProposta, {
+              documentos_enviados: true,
+              log_entry: { event: "docs_uploaded", detail: `${results.length} documento(s) enviado(s)` },
+            });
+          }
+        } else {
+          toast.warning(
+            `${results.length - failed.length}/${results.length} documentos enviados.`,
+            { description: failed.map((f) => f.label).join(", ") }
+          );
+        }
+      } catch {
+        setDocsUploadState("error");
+      }
+    };
+    sendDocs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasysState, idPessoa]);
 
   // Após cadastro no DataSys confirmado, envia e-mail de boas-vindas com o manual
   useEffect(() => {
@@ -376,87 +512,86 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
     try {
       // Salva pagador na store
       if (isHolderPayer) {
-        setPayer({ isHolder: true, cpf: holder?.cpf, phone: holder?.phone, email: holder?.email });
+        setPayer({ 
+          isHolder: true, 
+          fullName: holder?.name, 
+          cpf: holder?.cpf ?? "", 
+          phone: holder?.phone ?? "", 
+          email: holder?.email ?? "" 
+        });
       } else {
-        setPayer({ isHolder: false, ...data });
+        setPayer({ 
+          isHolder: false, 
+          fullName: data.fullName, 
+          cpf: data.cpf, 
+          phone: data.phone, 
+          email: data.email 
+        });
       }
 
       // Dados do cliente — usa holder do store quando titular = pagador
       const customerData = isHolderPayer
         ? {
             name: holder?.name || "Titular",
-            cpf: holder?.cpf || "",
+            cpf: (holder?.cpf || "").replace(/\D/g, ""),
             email: holder?.email || "",
-            phone: holder?.phone || "",
-            cep: address?.cep || "74000000",
-            street: address?.street || "",
-            number: address?.number || "1",
-            neighborhood: address?.neighborhood || "",
-            city: address?.city || "",
-            state: address?.uf || "",
+            phone: (holder?.phone || "").replace(/\D/g, ""),
+            cep: (address?.cep || "74000000").replace(/\D/g, ""),
           }
         : {
             name: data.fullName || "Titular",
             cpf: data.cpf?.replace(/\D/g, "") || "",
             email: data.email || "",
             phone: data.phone?.replace(/\D/g, "") || "",
-            cep: address?.cep || "74000000",
-            street: address?.street || "",
-            number: address?.number || "1",
-            neighborhood: address?.neighborhood || "",
-            city: address?.city || "",
-            state: address?.uf || "",
+            cep: (address?.cep || "74000000").replace(/\D/g, ""),
           };
 
-      // Valor
+      // Valores financeiros
       const pricing = calculateCheckout(selectedPlan.id, dependentsCount, cycle);
-      const totalValueCents = Math.round(pricing.totalDueNow * 100);
-      const peopleCount = dependentsCount + 1;
-      const enrollmentUnitCents = Math.round(pricing.enrollmentFee * 100);
-      const monthlyUnitCents = Math.round(pricing.baseFee * 100);
+      const totalValueCents   = Math.round(pricing.totalDueNow * 100);
       const numMonths = cycle === "yearly" ? 12 : 1;
 
-      const username = process.env.UNIODONTO_ECOMMERCE_USERNAME || "uniodonto";
+      // Dados do cartão — parse MM/AA ou MM/AAAA
+      const parseExpiration = (raw: string | undefined) => {
+        const clean = (raw || "").replace(/\s/g, "");
+        const match = clean.match(/^(\d{1,2})[/]?(\d{2,4})$/);
+        if (!match) return { expirationMonth: "", expirationYear: "" };
+        const month = match[1].padStart(2, "0");
+        const year  = match[2].length === 2 ? `20${match[2]}` : match[2];
+        return { expirationMonth: month, expirationYear: year };
+      };
+      const { expirationMonth, expirationYear } = parseExpiration(data.cardExpiration);
+      const cardData = {
+        number:          (data.cardNumber || "").replace(/\s/g, ""),
+        holder:          data.cardName || "",
+        expirationMonth,
+        expirationYear,
+        cvv:             data.cardCvv || "",
+      };
 
-      // Chama a action correta
+      // ── Chama a action correta ──────────────────────────────────────────────
       if (paymentMethod === "pix") {
         const { processPixPayment } = await import("@/features/checkout/actions/ecommerce-actions");
         const result = await processPixPayment({
-          username,
           customer: customerData,
-          plan: selectedPlan.name,
-          enrollment: enrollmentUnitCents,
-          monthly: monthlyUnitCents,
           value: totalValueCents,
-          numLives: peopleCount,
-          numMonths,
+          plan: selectedPlan.name,
         });
+
         if (result.success) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const trans = (result.data as any)?.Charge?.Transactions?.[0];
-          const pixCode = trans?.Pix?.qrCode;
-          const pixImage = trans?.Pix?.image || trans?.Pix?.imageQrcode;
-          // Em alguns ambientes (ex: sandbox), a API retorna apenas `paymentLink` e não o QR/Copy&Paste.
-          // Nesse caso, abrimos o link para o usuário concluir o Pix.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const paymentLink = (result.data as any)?.Charge?.paymentLink;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const myId = (result.data as any)?.Charge?.myId as string | undefined;
-          
+          const d = result.data as any;
+          // O ecommerce_service retorna o objeto da GalaxPay diretamente
+          const pixCode     = d?.PaymentMethodPix?.qrCode    ?? d?.Charge?.Transactions?.[0]?.Pix?.qrCode;
+          const pixImage    = d?.PaymentMethodPix?.imagemQrcode ?? d?.Charge?.Transactions?.[0]?.Pix?.image;
+          const paymentLink = d?.paymentLink                 ?? d?.Charge?.paymentLink;
+          const myId        = (d?.myId ?? d?.Charge?.myId)  as string | undefined;
+
           if (pixCode) {
-            setPixData({
-              qrCode: pixCode,
-              image: pixImage,
-              value: totalValueCents / 100,
-              myId,
-            });
+            setPixData({ qrCode: pixCode, image: pixImage, value: totalValueCents / 100, myId });
             toast.success("Pix gerado com sucesso! Aguardando pagamento.", { duration: 8000 });
           } else if (typeof paymentLink === "string" && paymentLink.length > 0) {
-            setPixData({
-              value: totalValueCents / 100,
-              paymentLink,
-              myId,
-            });
+            setPixData({ value: totalValueCents / 100, paymentLink, myId });
             toast.success("Pix gerado. Escaneie o QR Code na tela.", { duration: 8000 });
           } else {
             toast.error("Erro ao gerar Pix", { description: "QR Code não retornado pela API." });
@@ -466,45 +601,20 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
         }
 
       } else if (paymentMethod === "credit_card") {
-        // Mensal permite optar por recorrência no cartão; anual permanece como cobrança parcelada/avulsa.
-        if (cycle === "monthly" && isRecurringCard) {
-          const { processRecurringPayment } = await import("@/features/checkout/actions/ecommerce-actions");
-          const result = await processRecurringPayment({
-            username,
-            customer: customerData,
-            value: totalValueCents,
-            plan: selectedPlan.name,
-            enrollment: enrollmentUnitCents,
-            monthly: monthlyUnitCents,
-            numLives: peopleCount,
-            numMonths,
-          });
-          if (result.success) {
-            toast.success("Cobrança recorrente criada com sucesso!");
-          } else {
-            toast.error("Falha ao criar recorrência", { description: result.error });
-          }
-        } else {
+        {
+          // ── Avulso / Parcelado (anual ou mensal)
           const { processCreditCardPayment } = await import("@/features/checkout/actions/ecommerce-actions");
           const result = await processCreditCardPayment({
-            username,
-            customer: customerData,
-            value: totalValueCents,
-            plan: selectedPlan.name,
-            enrollment: enrollmentUnitCents,
-            monthly: monthlyUnitCents,
-            numLives: peopleCount,
+            customer:     customerData,
+            card:         cardData,
+            value:        totalValueCents,
+            plan:         selectedPlan.name,
+            installments: numMonths,
             numMonths,
           });
           if (result.success) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const link = (result.data as any)?.Charge?.PaymentMethodCreditCard?.Link?.url;
-            if (typeof link === "string" && link.length > 0) {
-              window.open(link, "_blank", "noopener,noreferrer");
-              toast.success("Link de pagamento gerado. Abra a janela para concluir.");
-            } else {
-              toast.success("Link de pagamento gerado.");
-            }
+            toast.success("Pagamento aprovado! Finalizando seu cadastro…");
+            setPaymentApproved(true); // dispara o fluxo DataSys igual ao Pix
           } else {
             toast.error("Falha no pagamento", { description: result.error });
           }
@@ -529,8 +639,6 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
   const submitLabel =
     paymentMethod === "pix"
       ? "Gerar Pix"
-      : paymentMethod === "credit_card" && cycle === "monthly" && isRecurringCard
-      ? "Contratar Recorrência"
       : "Pagar e Finalizar";
 
   // ── Tela de Boas-Vindas (pós cadastro DataSys aprovado) ───────────────────
@@ -628,6 +736,50 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
             )}
           </div>
         </div>
+
+        {/* Status do Envio de Documentos */}
+        {uploadedDocuments.length > 0 && (
+          <div className={cn(
+            "rounded-2xl border p-4 flex items-center gap-3 transition-all",
+            docsUploadState === "done"
+              ? "border-green-200 bg-green-50"
+              : docsUploadState === "error"
+              ? "border-red-200 bg-red-50"
+              : "border-amber-200 bg-amber-50"
+          )}>
+            <div className={cn(
+              "p-2 rounded-full shrink-0",
+              docsUploadState === "done" ? "bg-green-100" : docsUploadState === "error" ? "bg-red-100" : "bg-amber-100"
+            )}>
+              {docsUploadState === "uploading" ? (
+                <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
+              ) : docsUploadState === "done" ? (
+                <CheckCircle className="w-4 h-4 text-green-600" />
+              ) : docsUploadState === "error" ? (
+                <AlertTriangle className="w-4 h-4 text-red-500" />
+              ) : (
+                <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
+              )}
+            </div>
+            <div>
+              {docsUploadState === "uploading" && (
+                <p className="text-sm font-bold text-amber-900">Enviando seus documentos ao sistema…</p>
+              )}
+              {docsUploadState === "done" && (
+                <p className="text-sm font-bold text-green-800">Documentos registrados com sucesso! ✅</p>
+              )}
+              {docsUploadState === "error" && (
+                <>
+                  <p className="text-sm font-bold text-red-800">Falha no envio de documentos</p>
+                  <p className="text-xs text-red-600">Entre em contato: documentos@uniodonto.com.br</p>
+                </>
+              )}
+              {docsUploadState === "idle" && (
+                <p className="text-sm text-amber-800">Aguardando confirmação para enviar documentos…</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Download do Manual */}
         <a href="/MANUAL_DO_CLIENTE.pdf" download="Manual_do_Cliente_Uniodonto.pdf"
@@ -765,27 +917,6 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
           </div>
         </div>
 
-        {/* Documentos obrigatórios */}
-        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
-          <div className="flex items-start gap-3">
-            <div className="bg-amber-100 p-2 rounded-full shrink-0 mt-0.5">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-            </div>
-            <div>
-              <p className="font-bold text-amber-900 text-sm">Envio de documentos obrigatório</p>
-              <p className="text-xs text-amber-700 mt-1">Para a <strong>ativação completa</strong>, envie os documentos abaixo.</p>
-            </div>
-          </div>
-          <ul className="space-y-2">
-            {["RG ou CNH (frente e verso)","CPF (ou documento que contenha o CPF)","Comprovante de residência (últimos 90 dias)","Foto 3x4 ou selfie recente"].map((label,i)=>(
-              <li key={i} className="flex items-center gap-2.5 text-sm text-amber-800"><FileText className="w-4 h-4 text-amber-600 shrink-0" />{label}</li>
-            ))}
-          </ul>
-          <p className="text-xs text-amber-600 border-t border-amber-200 pt-2 font-medium">
-            📧 <a href="mailto:documentos@uniodonto.com.br" className="underline">documentos@uniodonto.com.br</a> — informe nome e nº de carteirinha no assunto.
-          </p>
-        </div>
-
       </div>
     );
   }
@@ -841,12 +972,12 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
         </div>
 
         {pixData.status && (
-          <p className={cn("text-sm font-medium", pixApproved ? "text-green-700" : "text-gray-600")}>
-            Status: {pixApproved ? "Pagamento aprovado" : pixData.status}
+          <p className={cn("text-sm font-medium", paymentApproved ? "text-green-700" : "text-gray-600")}>
+            Status: {paymentApproved ? "Pagamento aprovado" : pixData.status}
           </p>
         )}
 
-        {pixApproved && (
+        {paymentApproved && (
           <div className="w-full max-w-sm rounded-2xl border bg-white p-4 text-left space-y-2">
             <p className="text-sm font-bold text-gray-900">Finalizando seu cadastro</p>
             <p className="text-xs text-gray-500">
@@ -935,15 +1066,28 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
       </div>
 
       {/* ── Toggle: Titular é o pagador? ── */}
-      <div
-        className="group p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 cursor-pointer flex items-center justify-between"
-        onClick={() => setIsHolderPayer(!isHolderPayer)}
-      >
-        <span className="text-sm font-bold text-gray-900">O titular é o responsável financeiro?</span>
-        <div className={cn("w-12 h-6 rounded-full p-1 transition-colors", isHolderPayer ? "bg-brand-wine" : "bg-gray-300")}>
-          <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform", isHolderPayer ? "translate-x-6" : "translate-x-0")} />
+      {/* Quando o titular é menor de 18, o toggle fica bloqueado */}
+      {holderIsMinor ? (
+        <div className="p-4 rounded-xl border-2 border-amber-300 bg-amber-50 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-amber-900">Titular menor de idade</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Por ser menor de 18 anos, o titular não pode ser o responsável financeiro. Preencha os dados do responsável abaixo.
+            </p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div
+          className="group p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 cursor-pointer flex items-center justify-between"
+          onClick={() => setIsHolderPayer(!isHolderPayer)}
+        >
+          <span className="text-sm font-bold text-gray-900">O titular é o responsável financeiro?</span>
+          <div className={cn("w-12 h-6 rounded-full p-1 transition-colors", isHolderPayer ? "bg-brand-wine" : "bg-gray-300")}>
+            <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform", isHolderPayer ? "translate-x-6" : "translate-x-0")} />
+          </div>
+        </div>
+      )}
 
       {/* ── Dados do Titular (visível quando titular é o pagador) ── */}
       {isHolderPayer && (
@@ -1037,7 +1181,7 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
         </div>
       </div>
 
-      {/* ── Formulário de Cartão (Crédito e Recorrente) ── */}
+      {/* ── Formulário de Cartão ── */}
       {needsCard && (
         <div className="p-6 border border-gray-200 rounded-2xl bg-white space-y-4 animate-in slide-in-from-top-2">
           <h4 className="font-bold text-gray-900 border-b pb-2 flex items-center gap-2">
@@ -1047,22 +1191,6 @@ export function PaymentStep({ onBack }: PaymentStepProps) {
               <span className="ml-auto text-xs font-normal text-gray-500">Parcelado em até 12x</span>
             )}
           </h4>
-
-          {/* Recorrência no cartão (apenas mensal) */}
-          {cycle === "monthly" && (
-            <div
-              className="group p-4 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 cursor-pointer flex items-center justify-between"
-              onClick={() => setIsRecurringCard((v) => !v)}
-            >
-              <div className="flex items-center gap-2">
-                <RefreshCcw className={cn("w-4 h-4", isRecurringCard ? "text-brand-wine" : "text-gray-400")} />
-                <span className="text-sm font-bold text-gray-900">Cobrança recorrente no cartão</span>
-              </div>
-              <div className={cn("w-12 h-6 rounded-full p-1 transition-colors", isRecurringCard ? "bg-brand-wine" : "bg-gray-300")}>
-                <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform", isRecurringCard ? "translate-x-6" : "translate-x-0")} />
-              </div>
-            </div>
-          )}
 
           <div className="space-y-1.5">
             <label className="text-sm text-gray-700">Número do Cartão</label>

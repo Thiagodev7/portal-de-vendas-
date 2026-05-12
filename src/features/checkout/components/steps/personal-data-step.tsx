@@ -35,6 +35,19 @@ function fromIsoDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
+// ─── Verifica se uma data DD/MM/AAAA representa menor de 18 anos ─────────────
+function isMinor(birthDate: string): boolean {
+  if (!birthDate || birthDate.length < 10) return false;
+  const [d, m, y] = birthDate.split("/").map(Number);
+  if (!d || !m || !y) return false;
+  const today = new Date();
+  const birth = new Date(y, m - 1, d);
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDiff = today.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) age--;
+  return age < 18;
+}
+
 // ─── Validador de data no formato DD/MM/AAAA ─────────────────────────────────
 const isValidDate = (val: string) => {
   if (!val || val.length < 10) return false;
@@ -44,25 +57,100 @@ const isValidDate = (val: string) => {
   return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
 };
 
+// ─── Validador de CPF (Algoritmo Oficial) ────────────────────────────────────
+function validateCPF(cpf: string): boolean {
+  const cleanCPF = cpf.replace(/\D/g, "");
+  if (cleanCPF.length !== 11) return false;
+  if (/^(\d)\1+$/.test(cleanCPF)) return false;
+  let sum = 0;
+  let remainder;
+  for (let i = 1; i <= 9; i++) sum = sum + parseInt(cleanCPF.substring(i - 1, i)) * (11 - i);
+  remainder = (sum * 10) % 11;
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cleanCPF.substring(9, 10))) return false;
+  sum = 0;
+  for (let i = 1; i <= 10; i++) sum = sum + parseInt(cleanCPF.substring(i - 1, i)) * (12 - i);
+  remainder = (sum * 10) % 11;
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cleanCPF.substring(10, 11))) return false;
+  return true;
+}
+
+// ─── Validador de Telefone (Obrigatório 11 dígitos e começar com 9) ──────────
+function validatePhone(phone: string): boolean {
+  const cleanPhone = phone.replace(/\D/g, "");
+  // Exige exatamente 11 dígitos e o primeiro dígito após o DDD deve ser '9'
+  return cleanPhone.length === 11 && cleanPhone.charAt(2) === "9";
+}
+
+// ─── Máscara de Telefone (Formato: 62 9 96509914) ────────────────────────────
+function applyPhoneMask(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 3) return `${digits.slice(0, 2)} ${digits.slice(2)}`;
+  
+  // Celular: 62 9 96509914
+  if (digits.length > 10) {
+    return `${digits.slice(0, 2)} ${digits.slice(2, 3)} ${digits.slice(3)}`;
+  }
+  
+  // Fixo: 62 33334444
+  return `${digits.slice(0, 2)} ${digits.slice(2)}`;
+}
+
+// ─── Máscara de CPF ──────────────────────────────────────────────────────────
+function applyCpfMask(value: string): string {
+  const digits = value.replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
 // --- SCHEMAS ---
 const dependentSchema = z.object({
   fullName: z.string().min(5, "Nome completo obrigatório"),
-  cpf: z.string().min(11, "CPF inválido"),
+  cpf: z.string().refine(validateCPF, "CPF inválido"),
   birthDate: z.string().refine(isValidDate, "Data inválida (DD/MM/AAAA)"),
   sex: z.string().min(1, "Selecione o sexo"),
   relationship: z.string().min(1, "Parentesco obrigatório"),
 });
 
-const personalDataSchema = z.object({
-  fullName: z.string().min(5, "Nome completo obrigatório"),
-  email: z.string().email("E-mail inválido"),
-  phone: z.string().min(10, "Telefone inválido"),
-  cpf: z.string().min(11, "CPF inválido"),
-  birthDate: z.string().refine(isValidDate, "Data inválida (DD/MM/AAAA)"),
-  motherName: z.string().optional(),
-  sex: z.string().min(1, "Selecione o sexo"),
-  dependents: z.array(dependentSchema).default([]),
-});
+const personalDataSchema = z
+  .object({
+    fullName: z.string().min(5, "Nome completo obrigatório"),
+    email: z.string().email("E-mail inválido"),
+    phone: z.string().refine(validatePhone, "Telefone inválido (DDD + número)"),
+    cpf: z.string().refine(validateCPF, "CPF inválido"),
+    birthDate: z.string().refine(isValidDate, "Data inválida (DD/MM/AAAA)"),
+    motherName: z.string().optional(),
+    sex: z.string().min(1, "Selecione o sexo"),
+    dependents: z.array(dependentSchema).default([]),
+  })
+  .superRefine((data, ctx) => {
+    const holderCpf = data.cpf.replace(/\D/g, "");
+
+    // CPF não pode se repetir entre titular e dependentes
+    const seenCpfs = new Set<string>([holderCpf]);
+    data.dependents.forEach((dep, i) => {
+      const depCpf = dep.cpf.replace(/\D/g, "");
+      if (depCpf === holderCpf) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dependents", i, "cpf"],
+          message: "CPF igual ao do titular não é permitido",
+        });
+      } else if (seenCpfs.has(depCpf)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dependents", i, "cpf"],
+          message: "CPF duplicado entre os dependentes",
+        });
+      } else {
+        seenCpfs.add(depCpf);
+      }
+    });
+  });
 
 type PersonalDataForm = z.infer<typeof personalDataSchema>;
 
@@ -201,6 +289,7 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
     setValue(`dependents.${index}.birthDate`, masked, { shouldValidate: true });
   };
 
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
 
@@ -215,6 +304,7 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
         </div>
       </div>
 
+
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
 
         {/* --- CAMPOS TITULAR --- */}
@@ -226,6 +316,11 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
             <div className="relative">
               <input
                 {...register("cpf")}
+                onChange={(e) => {
+                  const masked = applyCpfMask(e.target.value);
+                  e.target.value = masked;
+                  setValue("cpf", masked, { shouldValidate: true });
+                }}
                 onBlur={handleCpfBlur}
                 className={cn(
                   "w-full p-3 rounded-lg border outline-none transition-all pr-10",
@@ -289,8 +384,14 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
             <label className="text-sm font-medium text-gray-700">Celular</label>
             <input
               {...register("phone")}
+              onChange={(e) => {
+                const masked = applyPhoneMask(e.target.value);
+                e.target.value = masked;
+                setValue("phone", masked, { shouldValidate: true });
+              }}
               className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/20 outline-none"
-              placeholder="(62) 99999-9999"
+              placeholder="62 9 96509914"
+              maxLength={15}
             />
             {errors.phone && <span className="text-xs text-red-500 font-medium">{errors.phone.message}</span>}
           </div>
@@ -380,9 +481,15 @@ export function PersonalDataStep({ onNext, onBack }: PersonalDataStepProps) {
                     <div className="relative">
                       <input
                         {...register(`dependents.${index}.cpf` as const)}
+                        onChange={(e) => {
+                          const masked = applyCpfMask(e.target.value);
+                          e.target.value = masked;
+                          setValue(`dependents.${index}.cpf`, masked, { shouldValidate: true });
+                        }}
                         onBlur={() => handleDependentCpfBlur(index)}
                         className="w-full p-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-sm"
                         placeholder="000.000.000-00"
+                        maxLength={14}
                       />
                       {loadingDependentIndex === index && (
                         <div className="absolute right-3 top-2.5">

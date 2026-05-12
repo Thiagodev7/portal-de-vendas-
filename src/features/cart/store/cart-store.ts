@@ -36,6 +36,16 @@ export interface AddressInfo {
   streetTypeId?: number; // Datasys id_tipo_logradouro
 }
 
+// Documento enviado pelo beneficiário (armazenado como base64 em memória)
+export interface UploadedDocument {
+  id: string;            // rg_cnh | cpf | comprovante_residencia
+  label: string;
+  fileName: string;
+  extensao: string;      // jpg, png, pdf ...
+  base64: string;        // conteúdo do arquivo sem prefixo data:...
+  idTipoDocumento: number;
+}
+
 interface CartState {
   selectedPlan: IPlan | null;
   billingCycle: 'monthly' | 'yearly';
@@ -43,6 +53,7 @@ interface CartState {
   payer: PayerInfo;
   address: AddressInfo | null;
   holder: HolderInfo | null;
+  uploadedDocuments: UploadedDocument[]; // documentos em base64 (somente memória)
 
   setPlan: (plan: IPlan, cycle: 'monthly' | 'yearly') => void;
   setBillingCycle: (cycle: 'monthly' | 'yearly') => void;
@@ -50,6 +61,7 @@ interface CartState {
   setPayer: (payer: PayerInfo) => void;
   setAddress: (address: AddressInfo) => void;
   setHolder: (holder: HolderInfo) => void;
+  setUploadedDocuments: (docs: UploadedDocument[]) => void;
   clearCart: () => void;
 }
 
@@ -62,6 +74,7 @@ export const useCartStore = create<CartState>()(
       payer: { isHolder: true },
       address: null,
       holder: null,
+      uploadedDocuments: [],
 
       setPlan: (plan, cycle) => set({ selectedPlan: plan, billingCycle: cycle }),
       setBillingCycle: (cycle) => set({ billingCycle: cycle }),
@@ -69,11 +82,17 @@ export const useCartStore = create<CartState>()(
       setPayer: (payer) => set({ payer }),
       setAddress: (address) => set({ address }),
       setHolder: (holder) => set({ holder }),
+      setUploadedDocuments: (docs) => set({ uploadedDocuments: docs }),
 
-      clearCart: () => set({ selectedPlan: null, dependentsCount: 0, payer: { isHolder: true }, address: null, holder: null }),
+      clearCart: () => set({ selectedPlan: null, dependentsCount: 0, payer: { isHolder: true }, address: null, holder: null, uploadedDocuments: [] }),
     }),
     {
       name: 'uniodonto-cart',
+      partialize: (state) => {
+        // Ignora documentos grandes em base64 no localStorage para evitar QuotaExceededError
+        const { uploadedDocuments, ...rest } = state;
+        return rest;
+      },
     }
   )
 );

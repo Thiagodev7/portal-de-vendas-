@@ -18,7 +18,7 @@ const addressSchema = z.object({
   neighborhood: z.string().min(1, "Bairro obrigatório"),
   city: z.string().min(1, "Cidade obrigatória"),
   uf: z.string().min(2, "UF obrigatória"),
-  complement: z.string().optional(),
+  complement: z.string().min(1, "Complemento obrigatório (ex: Apto, Bloco, Casa)"),
 });
 
 type AddressForm = z.infer<typeof addressSchema>;
@@ -177,12 +177,20 @@ export function AddressStep({ onNext, onBack }: AddressStepProps) {
                 />
             </div>
             <div className="space-y-1">
-                <label className="text-sm font-medium text-gray-700">Complemento (Opcional)</label>
+                <label className="text-sm font-medium text-gray-700">
+                  Complemento <span className="text-red-500">*</span>
+                </label>
                 <input 
                     {...register("complement")}
-                    className="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-wine/20 outline-none"
-                    placeholder="Apto, Bloco, etc."
+                    className={cn(
+                      "w-full p-3 rounded-lg border focus:ring-2 outline-none transition-all",
+                      errors.complement
+                        ? "border-red-300 focus:ring-red-200 bg-red-50"
+                        : "border-gray-300 focus:ring-brand-wine/20 focus:border-brand-wine"
+                    )}
+                    placeholder="Ex: Apto 101, Bloco B, Casa 2..."
                 />
+                {errors.complement && <span className="text-xs text-red-500 font-medium">{errors.complement.message}</span>}
             </div>
         </div>
 

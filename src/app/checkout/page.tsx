@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 // --- IMPORTAÇÃO DOS PASSOS DO WIZARD ---
 import { AddressStep } from "@/features/checkout/components/steps/address-step";
 import { ContractStep } from "@/features/checkout/components/steps/contract-step";
+import { DocumentsStep } from "@/features/checkout/components/steps/documents-step";
 import { PaymentStep } from "@/features/checkout/components/steps/payment-step";
 import { PersonalDataStep } from "@/features/checkout/components/steps/personal-data-step";
 
@@ -22,7 +23,8 @@ const STEPS = [
   { id: 1, name: "Cobertura" },
   { id: 2, name: "Identificação" },
   { id: 3, name: "Contrato" },
-  { id: 4, name: "Pagamento" },
+  { id: 4, name: "Documentos" },
+  { id: 5, name: "Pagamento" },
 ];
 
 export default function CheckoutPage() {
@@ -153,10 +155,18 @@ export default function CheckoutPage() {
                     />
                 )}
 
-                {/* PASSO 4: PAGAMENTO (Resp. Financeiro + Forma de Pagamento) */}
+                {/* PASSO 4: DOCUMENTOS (Ciência dos documentos obrigatórios) */}
                 {currentStep === 4 && (
+                    <DocumentsStep
+                        onNext={() => setCurrentStep(5)}
+                        onBack={() => setCurrentStep(3)}
+                    />
+                )}
+
+                {/* PASSO 5: PAGAMENTO (Resp. Financeiro + Forma de Pagamento) */}
+                {currentStep === 5 && (
                     <PaymentStep 
-                        onBack={() => setCurrentStep(3)} 
+                        onBack={() => setCurrentStep(4)} 
                     />
                 )}
               </motion.div>

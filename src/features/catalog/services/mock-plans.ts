@@ -7,10 +7,13 @@ export const MOCK_PLANS: IPlan[] = [
     description: "Cobertura completa imediata. O melhor plano para quem não quer esperar.",
     price: 72.00, 
     period: "/mês",
-    highlight: true, // Destaque pois é o Ticket Médio mais alto e sem carência
+    highlight: true,
     colorTheme: "wine",
     copay: false,
     ctaText: "Contratar Quality",
+    nroContrato: 207002,
+    datasysContractId: 56429,
+    datasysPlanId: 1699,
     features: [
       { text: "Sem Carência (Uso Imediato)", included: true },
       { text: "Plantão 24h (Goiânia e Anápolis)", included: true },
@@ -34,6 +37,9 @@ export const MOCK_PLANS: IPlan[] = [
     colorTheme: "wine",
     copay: false,
     ctaText: "Contratar Quality Plus",
+    nroContrato: 208002,
+    datasysContractId: 56430,
+    datasysPlanId: 1700,
     features: [
       { text: "Carência de 90 dias", included: true }, // Diferença principal do Dart
       { text: "Plantão 24h (Goiânia e Anápolis)", included: true },
@@ -58,6 +64,9 @@ export const MOCK_PLANS: IPlan[] = [
     copay: true,
     observation: "Paga taxa por serviço (Coparticipação)",
     ctaText: "Contratar Smart",
+    nroContrato: 207003,
+    datasysContractId: 56833,
+    datasysPlanId: 1713,
     features: [
       { text: "Carência de 60 dias", included: true },
       { text: "Plantão 24h e Urgências", included: true },
@@ -82,6 +91,9 @@ export const MOCK_PLANS: IPlan[] = [
     copay: true,
     observation: "Paga taxa por serviço (Coparticipação)",
     ctaText: "Contratar Kids",
+    nroContrato: 207004,
+    datasysContractId: 56832,
+    datasysPlanId: 1707,
     features: [
       { text: "Carência de 60 dias", included: true },
       { text: "Odontopediatria Especializada", included: true },
@@ -105,6 +117,9 @@ export const MOCK_PLANS: IPlan[] = [
     copay: true,
     observation: "Paga taxa por serviço (Coparticipação)",
     ctaText: "Contratar Light",
+    nroContrato: 209020,
+    datasysContractId: 56834,
+    datasysPlanId: 1709,
     features: [
       { text: "Sem Carência (Conforme Dart)", included: true },
       { text: "Plantão 24h (Goiânia e Anápolis)", included: true },
